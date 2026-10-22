@@ -13,7 +13,7 @@ the night keeps going.
 - **Runs on the device**: tonight's schedule is written into one of a BedJet 3's three program slots, or into a
   BedJet V2's single sequence. The V2 has no Gentle heat or Dry, and only Heat has an adjustable temperature.
 - **Remote**: a direct remote for mode, temperature, fan and shut-off timer.
-- **History**: every change through the night, with the time and room temperature, so the morning
+- **History**: every change through the night, and each phase a schedule moved on to, with the time and room temperature, so the morning
   after you can see what you picked and when.
 - **Widgets**: tonight's schedule and where the night is up to on the Home Screen, Lock Screen and in
   StandBy, last night at a glance, and Start Night in Control Center and Siri. Widgets read what the app
