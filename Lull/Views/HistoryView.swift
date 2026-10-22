@@ -70,9 +70,13 @@ private struct NightRow: View {
                 .accessibilityIdentifier("Night")
 
                 if isExpanded {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(night.entries.enumerated()), id: \.element.id) { index, entry in
-                            EntryRow(entry: entry, isLast: index == night.entries.count - 1)
+                    // Redrawn each minute, so a phase the schedule moves on to while History is open shows up.
+                    TimelineView(.everyMinute) { context in
+                        let timeline = night.timeline(until: context.date)
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(timeline.enumerated()), id: \.element.id) { index, entry in
+                                EntryRow(entry: entry, isLast: index == timeline.count - 1)
+                            }
                         }
                     }
                     .transition(.opacity)
@@ -150,8 +154,9 @@ private struct EntryRow: View {
     private func title(spoken: Bool) -> String {
         switch entry.event {
         case let .air(mode, temperature, fan):
-            let parts = bedJet.adjustsTemperature(mode) ? [mode.title, model.degrees(temperature), "fan \(fan)%"] : [mode.title, "fan \(fan)%"]
-            return parts.joined(separator: spoken ? ", " : " · ")
+            return air(mode, temperature: temperature, fan: fan, spoken: spoken)
+        case let .phaseStarted(_, _, phase):
+            return air(phase.mode, temperature: phase.temperature, fan: phase.fanPercent, spoken: spoken)
         case .off: return "Turned off"
         case let .scheduleStarted(name, _): return "Started \(name ?? "a schedule")"
         case let .scheduleEnded(name, ending):
@@ -165,8 +170,16 @@ private struct EntryRow: View {
         }
     }
 
+    private func air(_ mode: Mode, temperature: Int, fan: Int, spoken: Bool) -> String {
+        // A pause in a schedule blows no air.
+        guard mode != .wait else { return mode.title }
+        let parts = bedJet.adjustsTemperature(mode) ? [mode.title, model.degrees(temperature), "fan \(fan)%"] : [mode.title, "fan \(fan)%"]
+        return parts.joined(separator: spoken ? ", " : " · ")
+    }
+
     private func detail(spoken: Bool) -> String? {
         var parts: [String] = []
+        if case let .phaseStarted(number, count, _) = entry.event { parts.append("Phase \(number) of \(count)") }
         if case .off(timerRanOut: true) = entry.event { parts.append("Timer ran out") }
         if let room = entry.room { parts.append("Room \(model.degrees(room))") }
         if entry.noticedLater { parts.append("Seen when Lull reopened") }
@@ -176,6 +189,7 @@ private struct EntryRow: View {
     private var symbol: String {
         switch entry.event {
         case let .air(mode, _, _): return mode.symbol
+        case let .phaseStarted(_, _, phase): return phase.mode.symbol
         case .off: return "power"
         case .scheduleStarted: return "moon.stars.fill"
         case .scheduleEnded(_, .early): return "exclamationmark"
@@ -186,6 +200,7 @@ private struct EntryRow: View {
     private var tint: Color {
         switch entry.event {
         case let .air(mode, _, _): return mode.tint
+        case let .phaseStarted(_, _, phase): return phase.mode.tint
         case .scheduleEnded(_, .early): return Theme.warm
         case .off: return Theme.neutral
         case .scheduleStarted, .scheduleEnded: return .white
