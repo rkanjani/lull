@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "screenshot-editor",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["--cwd", "screenshot-editor", "dev"],
+      "port": 3000
+    }
+  ]
+}
