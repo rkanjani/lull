@@ -19,6 +19,9 @@ struct HistoryEntry: Identifiable, Codable, Hashable {
         /// Names and phases are missing for schedules started from another phone.
         case scheduleStarted(name: String?, phases: [Phase]?)
         case scheduleEnded(name: String?, ending: Ending)
+        /// A schedule moving on to its next phase, counted from one. Never recorded: the BedJet plays a schedule
+        /// on its own while Lull is closed, so these are worked out from when it started, see `Night.timeline`.
+        case phaseStarted(number: Int, of: Int, phase: Phase)
     }
 
     enum Ending: Codable, Hashable {
@@ -84,9 +87,34 @@ struct Night: Identifiable {
             case .off, .scheduleStarted, .scheduleEnded:
                 schedule = nil
                 if let next { phases.append(Phase(.wait, minutes: Self.minutes(from: entry.date, to: next))) }
+            case .phaseStarted:
+                continue
             }
         }
         return phases.filter { $0.minutes > 0 }
+    }
+
+    /// The night's entries with each phase a schedule moved on to slotted in, up to `now`. A schedule runs until
+    /// something other than a change of air ends it, as `phases` draws it.
+    func timeline(until now: Date = Date()) -> [HistoryEntry] {
+        var timeline = entries
+        for (index, entry) in entries.enumerated() {
+            guard case let .scheduleStarted(_, schedulePhases?) = entry.event else { continue }
+            let ended = entries[(index + 1)...].first { if case .air = $0.event { false } else { true } }?.date ?? now
+            var phaseStart = entry.date
+            for (number, phase) in zip(1..., schedulePhases) {
+                if number > 1 {
+                    guard phaseStart < min(ended, now) else { break }
+                    // Kept the same from one drawing to the next, so the list doesn't see a new row each time.
+                    var id = entry.id.uuid
+                    id.15 &+= UInt8(truncatingIfNeeded: number)
+                    timeline.append(HistoryEntry(id: UUID(uuid: id), date: phaseStart,
+                                                 event: .phaseStarted(number: number, of: schedulePhases.count, phase: phase)))
+                }
+                phaseStart.addTimeInterval(TimeInterval(phase.minutes * 60))
+            }
+        }
+        return timeline.sorted { $0.date < $1.date }
     }
 
     /// The stretch of a schedule between two times, idle once the schedule is over.
