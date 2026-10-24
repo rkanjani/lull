@@ -595,6 +595,34 @@ final class DeviceSelectionTests: XCTestCase {
         XCTAssertNil(LiveStatus.of(run: bedJet.run, status: bedJet.status, reportedAt: bedJet.statusReceivedAt,
                                    generation: bedJet.generation))
     }
+
+    func testAReportSentBeforeOffDoesntTurnTheBedJetBackOn() async throws {
+        let window = BedJet.staleReportWindow
+        BedJet.staleReportWindow = 0.5
+        defer { BedJet.staleReportWindow = window }
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        await bedJet.setMode(.cool)
+        let running = try XCTUnwrap(bedJet.status)
+        XCTAssertTrue(running.isRunning)
+
+        // The BedJet reports every second, so one it sent while still cooling can arrive just after it took Off.
+        let link = unit(mine.id)
+        link.reports = false
+        let off = Task { await bedJet.setMode(.standby) }
+        try await waitUntil("Off to be taken") { bedJet.status?.mode == .standby }
+        link.onStatus?(running)
+        XCTAssertEqual(bedJet.status?.mode, .standby)
+        XCTAssertNil(LiveStatus.of(run: bedJet.run, status: bedJet.status, reportedAt: bedJet.statusReceivedAt,
+                                   generation: bedJet.generation))
+
+        // Later, a report that it's running is believed: someone turned it on again.
+        await off.value
+        try await Task.sleep(nanoseconds: 600_000_000)
+        link.onStatus?(running)
+        XCTAssertEqual(bedJet.status?.mode, .cool)
+    }
 }
 
 /// A BedJet for tests. It speaks like the simulated one, but connects only when allowed, records every command,

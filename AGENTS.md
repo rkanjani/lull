@@ -50,11 +50,14 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | BedJet sheet, BedJets nearby, choosing a BedJet | `Lull/Views/DeviceSheet.swift` | `android/app/.../ui/DeviceSheet.kt` |
 | History tab | `Lull/Views/HistoryView.swift` | `android/app/.../ui/HistoryScreen.kt` |
 | Launch and lifecycle | `Lull/LullApp.swift` | `android/app/.../MainActivity.kt` |
-| What widgets are handed | `Shared/WidgetSnapshot.swift` | `android/app/.../WidgetSnapshot.kt` |
+| What widgets are handed, and what each BedJet is doing | `Shared/WidgetSnapshot.swift`, `Shared/LiveStatus.swift` | `android/app/.../WidgetSnapshot.kt`, `LiveStatus.kt` |
 | Start Night and tab links from outside the app | `Shared/Intents.swift` | `android/app/.../Commands.kt` |
 | Tonight widget | `LullWidgets/TonightWidget.swift` | `android/app/.../widgets/TonightWidget.kt` |
 | Last Night widget | `LullWidgets/LastNightWidget.swift` | `android/app/.../widgets/LastNightWidget.kt` |
-| Widget pieces and redraws | `LullWidgets/WidgetParts.swift` | `android/app/.../widgets/WidgetParts.kt`, `Drawing.kt` |
+| Picking the BedJet a widget shows | `BedJetEntity`, `BedJetConfiguration` and `BothSidesConfiguration` in `Shared/Intents.swift` | `android/app/.../widgets/BedJetConfigureActivity.kt` |
+| Both Sides widget | `LullWidgets/BothSidesWidget.swift` | `android/app/.../widgets/BothSidesWidget.kt` |
+| Quick Remote widget, its presets and editing them | `LullWidgets/QuickRemoteWidget.swift`, `RemotePreset`, `PresetChoice`, `QuickRemoteConfiguration` and `QuickRemoteIntent` in `Shared/Intents.swift` | `android/app/.../widgets/QuickRemoteWidget.kt`, `QuickRemoteConfigureActivity.kt`, `RemotePreset` and `PresetChoice` in `Commands.kt` |
+| Widget pieces and redraws | `LullWidgets/WidgetParts.swift`, `BedJetSummary.swift` (one BedJet now, for Tonight and Both Sides) | `android/app/.../widgets/WidgetParts.kt`, `BedJetSummary.kt`, `Drawing.kt` |
 | Start Night and Remote controls | `LullWidgets/Controls.swift` | `android/app/.../widgets/Tiles.kt` (Quick Settings tiles and app shortcuts) |
 | A running BedJet outside the app: Live Activity on iOS, Live Update notification on Android | `Shared/LiveStatus.swift`, `Shared/BedJetActivityAttributes.swift`, `Lull/LiveActivities.swift`, `LullWidgets/BedJetLiveActivity.swift` | `android/app/.../LiveStatus.kt`, `LiveNotifications.kt` |
 | Protocol tests | `BedJetKit/Tests/BedJetKitTests/CodecTests.swift`, `CodecV2Tests.swift`, `DiscoveryTests.swift` | `android/bedjetkit/src/test/.../CodecTest.kt`, `CodecV2Test.kt`, `DiscoveryTest.kt` |
@@ -62,7 +65,7 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Choosing, switching and forgetting BedJets | `LullTests/DeviceSelectionTests.swift` | `android/app/src/androidTest/.../DeviceSelectionTest.kt` (on a device, since the model needs Android) |
 | Widget tests | `LullTests/WidgetTests.swift` | `android/app/src/test/.../WidgetTest.kt` |
 | Live Activity and Live Update tests | `LullTests/LiveStatusTests.swift`, `LiveActivitiesTests.swift`, `LullUITests/LiveActivityTests.swift` | `android/app/src/test/.../LiveStatusTest.kt`, `android/app/src/androidTest/.../LiveNotificationsTest.kt`, `LiveUpdateTest.kt` |
-| Widget UI tests | `LullUITests/HomeScreenWidgetTests.swift` | `android/app/src/androidTest/.../WidgetUiTest.kt` |
+| Widget UI tests | `LullUITests/HomeScreenWidgetTests.swift` | `android/app/src/androidTest/.../WidgetUiTest.kt`, `BedJetPickerTest.kt` and `QuickRemotePickerTest.kt` (the widgets' editors, which are system UI on iOS) |
 | Contrast tests | `LullTests/ContrastTests.swift` | `android/app/src/test/.../ContrastTest.kt` |
 | Screen reader and text size tests | `LullTests/VoiceOverTests.swift`, `LullUITests/AccessibilityTests.swift` | `android/app/src/androidTest/.../AccessibilityTest.kt` (with the semantics checks in `LullUiTest.kt`) |
 | UI tests | `LullUITests/LullUITests.swift` | `android/app/src/androidTest/.../LullUiTest.kt` |
@@ -147,6 +150,16 @@ Platform conventions, not behaviour:
   which only takes that side's countdown to 0:00; Android redraws instead, and takes the finished side out.
   In StandBy, on an iPhone charging on its side, the Live Activity fills the screen with a layout of its own;
   Android has no StandBy.
+- The Tonight widget has a layout of its own in StandBy on iOS, read from across the room; Android has no StandBy.
+- Each widget shows a BedJet picked by name (Both Sides two), and a Quick Remote's buttons are chosen too, by editing
+  the widget: an App Intent on iOS, a configuration screen on Android. Android opens that screen as a widget is
+  added when Lull knows more than one BedJet, and always for the Quick Remote, for its buttons, and sets the widget
+  to the BedJet on screen. iOS adds a widget unset, following the BedJet on screen (Both Sides with it on the left)
+  until it's edited: iOS works a default out once and reuses it, by when that BedJet may be forgotten. iOS types a Quick
+  Remote button's time and temperature into fields; Android sets them with sliders, the time in steps of 5 minutes.
+- On the iPhone, Tonight in StandBy and Both Sides light the night's curve up continuously, while Android's moves on each
+  redraw, every few minutes. Android's countdowns are classic Chronometers, since Glance has no timer, and can read
+  a second past zero before the widget is redrawn at the end.
 - iOS widget UI tests place the widgets on the Home and Lock Screens through Springboard. Android's draw each
   widget at each size with Glance's test runner, since launchers differ too much to drive.
 

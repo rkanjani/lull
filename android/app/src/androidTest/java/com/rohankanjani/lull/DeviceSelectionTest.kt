@@ -686,6 +686,37 @@ class DeviceSelectionTest {
         assertEquals(Mode.STANDBY, bedJet.status?.mode)
         assertNull(LiveStatus.of(bedJet.run, bedJet.status, bedJet.statusReceivedAt, bedJet.generation))
     }
+
+    @Test
+    fun aReportSentBeforeOffDoesntTurnTheBedJetBackOn() = onMain {
+        val window = BedJet.staleReportWindow
+        BedJet.staleReportWindow = 500
+        try {
+            val model = launch()
+            model.choose(mine)
+            val bedJet = connected(mine, model)
+            bedJet.setMode(Mode.COOL)
+            val running = requireNotNull(bedJet.status)
+            assertTrue(running.isRunning)
+
+            // The BedJet reports every second, so one it sent while still cooling can arrive just after it took Off.
+            val link = unit(mine.id)
+            link.reports = false
+            val off = async { bedJet.setMode(Mode.STANDBY) }
+            waitUntil("Off to be taken") { bedJet.status?.mode == Mode.STANDBY }
+            link.onStatus?.invoke(running)
+            assertEquals(Mode.STANDBY, bedJet.status?.mode)
+            assertNull(LiveStatus.of(bedJet.run, bedJet.status, bedJet.statusReceivedAt, bedJet.generation))
+
+            // Later, a report that it's running is believed: someone turned it on again.
+            off.await()
+            delay(600)
+            link.onStatus?.invoke(running)
+            assertEquals(Mode.COOL, bedJet.status?.mode)
+        } finally {
+            BedJet.staleReportWindow = window
+        }
+    }
 }
 
 /**

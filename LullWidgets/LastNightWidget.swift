@@ -4,7 +4,7 @@ import WidgetKit
 
 struct LastNightWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "LastNight", provider: NightProvider(preview: Self.preview)) { entry in
+        AppIntentConfiguration(kind: "LastNight", intent: BedJetConfiguration.self, provider: NightProvider(preview: Self.preview)) { entry in
             LastNightView(entry: entry)
         }
         .configurationDisplayName("Last Night")
@@ -32,7 +32,7 @@ struct LastNightView: View {
                 empty
             }
         }
-        .widgetURL(LullTab.history.url)
+        .widgetURL(entry.snapshot.link(to: .history))
         .environment(\.colorScheme, .dark)
         .containerBackground(for: .widget) { WidgetBackground() }
     }
@@ -49,17 +49,21 @@ struct LastNightView: View {
         }
         let changes = night.entries.filter { if case .air = $0.event { true } else { false } }.count
         let times = "\(start.formatted(date: .omitted, time: .shortened)) – \(end.formatted(date: .omitted, time: .shortened))"
-        let spoken = [
+        let spoken = entry.snapshot.spoken([
             "Last night, \(title)",
             names.isEmpty ? nil : names,
             "\(start.formatted(date: .omitted, time: .shortened)) to \(end.formatted(date: .omitted, time: .shortened))",
             room.map { "room \($0.replacingOccurrences(of: "–", with: " to "))" },
             changes > 0 ? "\(changes) \(changes == 1 ? "change" : "changes")" : nil,
-        ].compactMap { $0 }.joined(separator: ", ")
+        ].compactMap { $0 }.joined(separator: ", "))
 
         Group {
             if family == .systemSmall {
                 VStack(alignment: .leading, spacing: 0) {
+                    // Stacked: a name and "Last night" don't fit across a small widget together.
+                    if let name = entry.snapshot.headingName {
+                        WidgetEyebrow(name).padding(.bottom, 3)
+                    }
                     WidgetEyebrow("Last night")
                     Text(title)
                         .font(.system(size: 17, weight: .semibold))
@@ -83,7 +87,7 @@ struct LastNightView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .top, spacing: 8) {
                         VStack(alignment: .leading, spacing: 3) {
-                            WidgetEyebrow("Last night")
+                            WidgetEyebrow(entry.snapshot.headed("Last night"))
                             Text(title).font(.system(size: 19, weight: .semibold))
                             if !names.isEmpty {
                                 Text(names).font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.secondary)
@@ -117,7 +121,10 @@ struct LastNightView: View {
 
     private var empty: some View {
         VStack(alignment: .leading, spacing: 6) {
-            WidgetEyebrow("Last night")
+            VStack(alignment: .leading, spacing: 3) {
+                if let name = entry.snapshot.headingName { WidgetEyebrow(name) }
+                WidgetEyebrow("Last night")
+            }
             Spacer(minLength: 0)
             Text("No nights yet").font(.system(size: 17, weight: .semibold))
             Text("Nights with your BedJet show up here the morning after.")

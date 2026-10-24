@@ -64,6 +64,7 @@ final class AppModel {
     @ObservationIgnored private var discovery: BedJetDiscovery?
     @ObservationIgnored private var lookers = 0
     @ObservationIgnored private let liveActivities = LiveActivities()
+    @ObservationIgnored private var publishedWidgets: WidgetSnapshot?
     private var isLoaded = false
     /// The BedJets of the mode not in use, kept as they were saved.
     private var otherFleet: Fleet?
@@ -160,6 +161,9 @@ final class AppModel {
     func appMovedToBackground() {
         for bedJet in bedJets { bedJet.pause() }
         discovery?.stop()
+        // iOS can hold back a redraw asked for moments after another, and the BedJet changes in bursts, so the widgets
+        // are redrawn once more on leaving, with what Lull last knew.
+        publishWidgets(forced: true)
     }
 
     func appBecameActive() {
@@ -357,19 +361,37 @@ final class AppModel {
     // MARK: Widgets
 
     /// Hands the widgets what they show, for the BedJet on screen, and redraws them when it changed. Widgets can't
-    /// reach the BedJet, so this is all they know until Lull is opened again.
-    func publishWidgets() {
+    /// reach the BedJet, so this is all they know until Lull is opened again. `forced` redraws them even if nothing changed.
+    func publishWidgets(forced: Bool = false) {
         guard isLoaded, storage.publishesWidgets else { return }
+        // Called with every report from a BedJet, so what was last handed over is kept rather than read back.
+        let before = publishedWidgets ?? WidgetSnapshot.load()
         let snapshot = WidgetSnapshot(
             tonight: bedJet?.tonight,
             run: bedJet?.run,
             recentHistory: WidgetSnapshot.recent(bedJet?.history ?? []),
             useFahrenheit: useFahrenheit,
-            generation: bedJet?.generation ?? .v3
+            generation: bedJet?.generation ?? .v3,
+            bedJets: bedJets.map { bedJet in widgetBedJet(bedJet, before: before?.bedJets.first { $0.id == bedJet.id }) },
+            onScreen: selectedID
         )
-        guard snapshot.save() else { return }
+        let changed = snapshot != before
+        publishedWidgets = snapshot
+        let saved = changed && snapshot.save()
+        guard saved || forced else { return }
         WidgetCenter.shared.reloadAllTimelines()
         ControlCenter.shared.reloadAllControls()
+    }
+
+    /// One BedJet as the widgets see it.
+    private func widgetBedJet(_ bedJet: BedJet, before: WidgetBedJet?) -> WidgetBedJet {
+        let now = Date()
+        let current = LiveStatus.of(run: bedJet.run, status: bedJet.status, reportedAt: bedJet.statusReceivedAt,
+                                    generation: bedJet.generation, at: now)
+        let isWaiting = WidgetSnapshot.isWaiting(for: bedJet.status, isSavingSchedule: bedJet.isSavingSchedule)
+        let live = WidgetSnapshot.live(current, after: before?.live, isWaiting: isWaiting, at: now)
+        return WidgetBedJet(id: bedJet.id, name: title(of: bedJet), live: live, tonight: bedJet.tonight,
+                            generation: bedJet.generation, recentHistory: WidgetSnapshot.recent(bedJet.history))
     }
 
     // MARK: Live Activities

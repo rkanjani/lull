@@ -84,6 +84,10 @@ final class BedJet: Identifiable {
     private var settling: Task<Void, Never>?
     private var connectedAt = Date.distantPast
     private var lastCommandAt = Date.distantPast
+    /// When this phone last turned the BedJet off, to tell a report sent just before that from one sent after.
+    private var turnedOffAt: Date?
+    /// How long after Off a report saying the BedJet is still running is taken to have been sent before it.
+    static var staleReportWindow: TimeInterval = 2
 
     var saved: SavedBedJet {
         SavedBedJet(id: id, unit: unit, name: name, nickname: nickname, generation: knownGeneration, tonightID: tonightID, run: run, slot: slot,
@@ -219,10 +223,15 @@ final class BedJet: Identifiable {
     }
 
     private func statusChanged(_ status: DeviceStatus) {
+        // The BedJet reports every second, so a report it sent just before it took Off can arrive just after. Shown, it
+        // would put the air back on outside Lull, where it stays if Lull lets go of the BedJet before the next report.
+        if let turnedOffAt, status.isRunning, Date().timeIntervalSince(turnedOffAt) < Self.staleReportWindow { return }
+        turnedOffAt = nil
         self.status = status
         statusReceivedAt = Date()
         observe(status)
         app?.publishLiveActivities()
+        app?.publishWidgets()
         guard let run else { return }
         let settled = Date().timeIntervalSince(run.startedAt) > 15
         let programStopped = status.mode == .standby && status.extra?.programStep == 0
@@ -338,6 +347,7 @@ final class BedJet: Identifiable {
             // The BedJet only says it's off in its next report, and Lull may have let go of it by then, leaving it shown
             // as running outside Lull. The BedJet took the command, so it is off already; setting `run` publishes it.
             if mode == .standby { self.status?.mode = .standby }
+            self.turnedOffAt = mode == .standby ? Date() : nil
             self.run = nil
             if let endingSchedule { self.record(.scheduleEnded(name: endingSchedule, ending: .byYou)) }
             if mode != .standby { try await self.extendRuntime(entering: mode, askedAt: asked) }

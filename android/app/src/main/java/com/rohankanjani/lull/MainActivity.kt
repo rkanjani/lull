@@ -67,7 +67,9 @@ class MainActivity : ComponentActivity() {
         })
 
         publishShortcuts(this)
-        AppCommands.from(intent)?.let(AppCommands::send)
+        // Only when first opened: a recreated activity keeps the intent that opened it, and acting on it again would
+        // apply a Quick Remote preset or start a night nobody asked for this time.
+        if (savedInstanceState == null) AppCommands.from(intent)?.let(AppCommands::send)
 
         setContent {
             val askForBluetooth = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {

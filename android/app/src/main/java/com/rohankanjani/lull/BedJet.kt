@@ -143,6 +143,8 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     private var settling: Job? = null
     private var connectedAt = 0L
     private var lastCommandAt = 0L
+    /** When this phone last turned the BedJet off, to tell a report sent just before that from one sent after. */
+    private var turnedOffAt: Long? = null
 
     val saved: SavedBedJet
         get() = SavedBedJet(id, unit, name, nickname, knownGeneration, tonightID, run, slot, longestEnds, timerEnds)
@@ -274,10 +276,16 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     }
 
     private fun statusChanged(status: DeviceStatus) {
+        // The BedJet reports every second, so a report it sent just before it took Off can arrive just after. Shown, it
+        // would put the air back on outside Lull, where it stays if Lull lets go of the BedJet before the next report.
+        val turnedOffAt = turnedOffAt
+        if (turnedOffAt != null && status.isRunning && System.currentTimeMillis() - turnedOffAt < staleReportWindow) return
+        this.turnedOffAt = null
         this.status = status
         statusReceivedAt = System.currentTimeMillis()
         observe(status)
         app.publishLiveNotifications()
+        app.publishWidgets()
         val run = run ?: return
         val now = System.currentTimeMillis()
         val settled = now - run.startedAt > 15_000
@@ -406,6 +414,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
             // The BedJet only says it's off in its next report, and Lull may have let go of it by then, leaving it shown
             // as running outside Lull. The BedJet took the command, so it is off already; setting `run` publishes it.
             if (mode == Mode.STANDBY) status = status?.copy(mode = Mode.STANDBY)
+            turnedOffAt = if (mode == Mode.STANDBY) System.currentTimeMillis() else null
             run = null
             if (endingSchedule != null) record(HistoryEntry.Event.ScheduleEnded(endingSchedule, HistoryEntry.Ending.ByYou))
             if (mode != Mode.STANDBY) extendRuntime(entering = mode, asked = asked)
@@ -746,4 +755,9 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
 
     val spokenConnectionLabel: String
         get() = if (linkState == LinkState.YIELDED && !isSlowToFind) "in use on another phone" else connectionLabel
+
+    companion object {
+        /** How long after Off a report saying the BedJet is still running is taken to have been sent before it. */
+        var staleReportWindow = 2_000L
+    }
 }
