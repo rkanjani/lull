@@ -56,10 +56,12 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Last Night widget | `LullWidgets/LastNightWidget.swift` | `android/app/.../widgets/LastNightWidget.kt` |
 | Widget pieces and redraws | `LullWidgets/WidgetParts.swift` | `android/app/.../widgets/WidgetParts.kt`, `Drawing.kt` |
 | Start Night and Remote controls | `LullWidgets/Controls.swift` | `android/app/.../widgets/Tiles.kt` (Quick Settings tiles and app shortcuts) |
+| A running BedJet outside the app: Live Activity on iOS, Live Update notification on Android | `Shared/LiveStatus.swift`, `Shared/BedJetActivityAttributes.swift`, `Lull/LiveActivities.swift`, `LullWidgets/BedJetLiveActivity.swift` | `android/app/.../LiveStatus.kt`, `LiveNotifications.kt` |
 | Protocol tests | `BedJetKit/Tests/BedJetKitTests/CodecTests.swift`, `CodecV2Tests.swift`, `DiscoveryTests.swift` | `android/bedjetkit/src/test/.../CodecTest.kt`, `CodecV2Test.kt`, `DiscoveryTest.kt` |
 | App logic tests | | `android/app/src/test/.../ScheduleTest.kt` |
 | Choosing, switching and forgetting BedJets | `LullTests/DeviceSelectionTests.swift` | `android/app/src/androidTest/.../DeviceSelectionTest.kt` (on a device, since the model needs Android) |
 | Widget tests | `LullTests/WidgetTests.swift` | `android/app/src/test/.../WidgetTest.kt` |
+| Live Activity and Live Update tests | `LullTests/LiveStatusTests.swift`, `LiveActivitiesTests.swift`, `LullUITests/LiveActivityTests.swift` | `android/app/src/test/.../LiveStatusTest.kt`, `android/app/src/androidTest/.../LiveNotificationsTest.kt`, `LiveUpdateTest.kt` |
 | Widget UI tests | `LullUITests/HomeScreenWidgetTests.swift` | `android/app/src/androidTest/.../WidgetUiTest.kt` |
 | Contrast tests | `LullTests/ContrastTests.swift` | `android/app/src/test/.../ContrastTest.kt` |
 | Screen reader and text size tests | `LullTests/VoiceOverTests.swift`, `LullUITests/AccessibilityTests.swift` | `android/app/src/androidTest/.../AccessibilityTest.kt` (with the semantics checks in `LullUiTest.kt`) |
@@ -124,6 +126,21 @@ Platform conventions, not behaviour:
 - Android phones have no Lock Screen or StandBy widgets, so the Tonight and Last Night widgets are Home
   Screen only. Quick Settings tiles stand in for the Control Center controls, and app shortcuts (long-press
   the icon) for Siri and App Shortcuts. Both open Lull to start the night, as the iOS control does.
+- A running BedJet shows as a Live Activity (Dynamic Island and Lock Screen) on iOS and as an ongoing
+  notification promoted to a Live Update (status bar chip) on Android; where Android doesn't promote it
+  (Android 16's first release, as seen on its emulator), it stays an ordinary ongoing notification. Android
+  asks for the notification permission the first time a BedJet runs; iOS asks on the Lock Screen whether to
+  allow Live Activities. iOS draws the night's curve and lights it up to the current time by itself; Android
+  shows the phases as a segmented progress bar. Android can wake briefly while Lull is closed, so it moves
+  that bar along every few minutes and on to each new phase, and takes the Live Update down when the night or
+  timer ends. iOS can't run Lull while it's closed, so its Live Activity hides the phase once it may be out of
+  date and keeps a finished night at 0:00 until Lull is opened; iOS also ends any Live Activity after 8 hours.
+  With a BedJet on each side of the bed, both share one Live Activity and one Live Update, under one icon made of
+  both their modes, since the Dynamic Island shows only one of an app's Live Activities; a third isn't shown. The
+  Dynamic Island counts both down and draws a row for each; Android's notification has a line for each and counts
+  down to whichever ends first, and draws a night's progress bar only for a single BedJet.
+  In StandBy, on an iPhone charging on its side, the Live Activity fills the screen with a layout of its own;
+  Android has no StandBy.
 - iOS widget UI tests place the widgets on the Home and Lock Screens through Springboard. Android's draw each
   widget at each size with Glance's test runner, since launchers differ too much to drive.
 

@@ -75,7 +75,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     var linkState by mutableStateOf(LinkState.SEARCHING); private set
     var status by mutableStateOf<DeviceStatus?>(null); private set
     /** When [status] arrived. It is kept while another phone has the BedJet or Lull is off screen, so it ages. */
-    private var statusReceivedAt: Long? = null
+    var statusReceivedAt: Long? = null; private set
     var firmware by mutableStateOf<String?>(null); private set
     /** The kind of BedJet, kept so schedules can be edited for it while it is away. Null until it has said. */
     var knownGeneration by mutableStateOf(saved.generation); private set
@@ -106,8 +106,14 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     /** Set once Lull has looked for the BedJet for a while without reaching it, to suggest what to check. */
     var isSlowToFind by mutableStateOf(false); private set
     var isBusy by mutableStateOf(false); private set
-    /** A schedule is being written to the BedJet, which takes several steps. */
-    var isSavingSchedule by mutableStateOf(false); private set
+    private var writingSchedule by mutableStateOf(false)
+    /**
+     * A schedule is being written to the BedJet, which takes several steps. Its Live Update holds still while this is
+     * set, and moves on to the night as soon as it clears.
+     */
+    var isSavingSchedule: Boolean
+        get() = writingSchedule
+        private set(value) { writingSchedule = value; app.publishLiveNotifications() }
     /** Set when every slot on the BedJet is taken and the user has to pick one to reuse. */
     var needsSlotChoice by mutableStateOf(false)
 
@@ -271,6 +277,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         this.status = status
         statusReceivedAt = System.currentTimeMillis()
         observe(status)
+        app.publishLiveNotifications()
         val run = run ?: return
         val now = System.currentTimeMillis()
         val settled = now - run.startedAt > 15_000
@@ -396,6 +403,9 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
             // Until the new mode is given its own run, a fan or temperature change leaves the timer alone.
             forgetRemoteTimer()
             link.setMode(mode)
+            // The BedJet only says it's off in its next report, and Lull may have let go of it by then, leaving it shown
+            // as running outside Lull. The BedJet took the command, so it is off already; setting `run` publishes it.
+            if (mode == Mode.STANDBY) status = status?.copy(mode = Mode.STANDBY)
             run = null
             if (endingSchedule != null) record(HistoryEntry.Event.ScheduleEnded(endingSchedule, HistoryEntry.Ending.ByYou))
             if (mode != Mode.STANDBY) extendRuntime(entering = mode, asked = asked)

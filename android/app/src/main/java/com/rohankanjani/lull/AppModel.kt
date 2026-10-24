@@ -113,6 +113,7 @@ class AppModel(
             fahrenheit = value
             prefs.edit().putBoolean("useFahrenheit", value).apply()
             publishWidgets()
+            publishLiveNotifications()
         }
 
     private var demo by mutableStateOf(demoMode ?: (isEmulator() || prefs.getBoolean("demoMode", false)))
@@ -130,6 +131,9 @@ class AppModel(
         }
 
     var errorMessage by mutableStateOf<String?>(null)
+
+    /** Set when a BedJet would be shown in a Live Update but notifications aren't allowed, so Lull asks once. */
+    var wantsNotificationPermission by mutableStateOf(false); private set
 
     /**
      * Where the screens run what the person asked for. It outlives the screen that asked, as an
@@ -411,6 +415,7 @@ class AppModel(
     fun save() {
         if (!isLoaded) return
         publishWidgets()
+        publishLiveNotifications()
         val file = storage.file("lull.json") ?: return
         val saved = Saved(
             schedules = schedules,
@@ -445,6 +450,41 @@ class AppModel(
         if (!snapshot.save(context)) return
         scope.launch { WidgetUpdates.refresh(context) }
         requestTileUpdates(context)
+    }
+
+    // Live Updates
+
+    private val liveNotifications by lazy { LiveNotifications(application) }
+
+    /**
+     * Shows the running BedJets in a Live Update in the status bar, and takes out any that stopped, were forgotten or
+     * belong to the other mode.
+     */
+    fun publishLiveNotifications() {
+        // UI tests (`ephemeral`) start nights too, and would leave Live Updates behind them, or stop to ask for notifications.
+        if (!isLoaded || !storage.publishesWidgets || options.ephemeral) return
+        val wanted = mutableListOf<Pair<String, LiveNotifications.Wanted>>()
+        for (bedJet in bedJets) {
+            val status = LiveStatus.of(bedJet.run, bedJet.status, bedJet.statusReceivedAt, bedJet.generation)
+            // Starting a night reports the BedJet's program before the night is known here; what's up stays until then
+            // and moves straight on to the night, rather than ending and starting over.
+            if (bedJet.isSavingSchedule) {
+                wanted += bedJet.id to LiveNotifications.Wanted.Keep
+            } else if (status != null) {
+                wanted += bedJet.id to LiveNotifications.Wanted.Show(LiveSide(bedJet.id, status, title(bedJet), bedJet.generation))
+            } else if (bedJet.status == null) {
+                wanted += bedJet.id to LiveNotifications.Wanted.Keep
+            }
+        }
+        val blocked = liveNotifications.show(wanted, useFahrenheit)
+        if (blocked && !prefs.getBoolean("askedForNotifications", false)) wantsNotificationPermission = true
+    }
+
+    /** The notification permission was just granted or refused. Lull doesn't ask again either way. */
+    fun notificationPermissionAnswered() {
+        prefs.edit().putBoolean("askedForNotifications", true).apply()
+        wantsNotificationPermission = false
+        publishLiveNotifications()
     }
 
     // Last, so every property above is set before anything is loaded or connected.

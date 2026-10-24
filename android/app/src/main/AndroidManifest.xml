@@ -9,6 +9,9 @@
         tools:targetApi="s" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <!-- Shows a running BedJet as a Live Update in the status bar. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
 
     <uses-feature
         android:name="android.hardware.bluetooth_le"
@@ -65,6 +68,9 @@
         </receiver>
         <receiver
             android:name=".widgets.WidgetTickReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".LiveNotificationReceiver"
             android:exported="false" />
 
         <!-- Quick Settings tiles, the counterpart of the iPhone app's Control Center controls. -->

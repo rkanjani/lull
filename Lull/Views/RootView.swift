@@ -17,6 +17,8 @@ struct RootView: View {
         }
         // Widgets open the tab they show; controls and Shortcuts send commands.
         .onOpenURL { url in
+            // A link can name its BedJet, so tapping one side of the bed opens that side.
+            if let id = LullTab.bedJet(in: url) { model.select(id) }
             if let tab = LullTab(url: url) { selectedTab = tab }
         }
         .onAppear { AppCommands.handler = handle }

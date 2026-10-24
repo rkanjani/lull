@@ -92,6 +92,12 @@ final class WidgetTests: XCTestCase {
         }
         XCTAssertNil(LullTab(url: URL(string: "lull://settings")!))
         XCTAssertNil(LullTab(url: URL(string: "https://schedule")!))
+        // A link can also name its BedJet.
+        let bedJet = UUID()
+        let link = LullTab.schedule.url(showing: bedJet)
+        XCTAssertEqual(LullTab(url: link), .schedule)
+        XCTAssertEqual(LullTab.bedJet(in: link), bedJet)
+        XCTAssertNil(LullTab.bedJet(in: LullTab.remote.url))
     }
 
     @MainActor

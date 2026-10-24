@@ -92,7 +92,11 @@ fun RootScreen(model: AppModel) {
     DisposableEffect(Unit) {
         AppCommands.handler = { command ->
             when (command) {
-                is AppCommands.Command.Show -> selectedTab = command.tab.ordinal
+                is AppCommands.Command.Show -> {
+                    // A link can name its BedJet, so tapping one side of the bed opens that side.
+                    command.bedJet?.let(model::select)
+                    selectedTab = command.tab.ordinal
+                }
                 AppCommands.Command.StartNight -> {
                     selectedTab = LullTab.SCHEDULE.ordinal
                     // A night already under way, from this phone or another, is left running and shown.
