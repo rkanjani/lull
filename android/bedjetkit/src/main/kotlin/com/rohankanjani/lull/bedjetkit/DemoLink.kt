@@ -32,6 +32,8 @@ class DemoLink(
         private set
     var clock: Pair<Int, Int>? = null
         private set
+    /** When the clock was set, so it can keep time from there. */
+    private var clockSetAt = System.currentTimeMillis()
     override val lastStatus: DeviceStatus? get() = if (state == LinkState.READY) status else null
     /** The step of the program running on the unit, connected or not; 0 when none is. */
     val programStep: Int get() = status.extra?.programStep ?: 0
@@ -84,7 +86,10 @@ class DemoLink(
                 status = status.copy(fanStep = bytes[1])
                 limitHeat()
             }
-            bytes[0] == 0x08 && bytes.size >= 3 -> clock = bytes[1] to bytes[2]
+            bytes[0] == 0x08 && bytes.size >= 3 -> {
+                clock = bytes[1] to bytes[2]
+                clockSetAt = System.currentTimeMillis()
+            }
             bytes[0] == 0x40 -> store(command)
         }
         onStatus?.invoke(status)
@@ -208,7 +213,8 @@ class DemoLink(
     /** Pretends the running program started this much earlier, for demos that should show a night in progress. */
     fun skipAhead(minutes: Int) {
         val run = running ?: return
-        running = run.copy(stepEnds = run.stepEnds - minutes * 60_000L)
+        // A step that ends at a time of day ends then, however much earlier it started.
+        if (slots[run.slot]?.steps?.get(run.step)?.endsAtClockTime != true) running = run.copy(stepEnds = run.stepEnds - minutes * 60_000L)
         while (true) {
             val current = running ?: break
             if (System.currentTimeMillis() < current.stepEnds) break
@@ -229,11 +235,21 @@ class DemoLink(
             return
         }
         val next = program.steps[step]
-        val minutes = next.hours * 60 + next.minutes
+        var minutes = next.hours * 60 + next.minutes
+        // Like the real unit, a step that ends at a time of day runs until its clock gets there, the next day if it has passed.
+        val now = minuteOfDay(start)
+        if (next.endsAtClockTime && now != null) minutes = ((minutes - now) % 1440 + 1440) % 1440
         running = run.copy(step = step, stepEnds = start + minutes * 60_000L)
         status = status.copy(fanStep = next.fanStep, targetTemperature = next.temperature)
         setProgramStep(step + 1)
         enter(next.mode, minutes)
+    }
+
+    /** The unit's time of day at [millis], in minutes after midnight, kept from when its clock was set. */
+    private fun minuteOfDay(millis: Long): Int? {
+        val (hour, minute) = clock ?: return null
+        val elapsed = Math.floorDiv(millis - clockSetAt, 60_000L).toInt()
+        return ((hour * 60 + minute + elapsed) % 1440 + 1440) % 1440
     }
 
     private fun tick() {

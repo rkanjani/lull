@@ -30,6 +30,7 @@ class WatchModelTest {
     private class MemoryStore : WatchStore {
         override var picked: String? = null
         override var askedAt: Long? = null
+        override var remoteShowsTime = false
         override fun load(): WidgetSnapshot? = null
         override fun save(snapshot: WidgetSnapshot) {}
     }
@@ -76,6 +77,13 @@ class WatchModelTest {
     }
 
     @Test
+    fun theRemoteRemembersShowingATime() = runTest {
+        assertFalse("a duration, by default", launch(phone()).remoteShowsTime)
+        launch(phone()).remoteShowsTime = true
+        assertTrue("remembered on the watch", launch(phone()).remoteShowsTime)
+    }
+
+    @Test
     fun anErrandStaysBusyWhileItsSettingsChange() = runTest {
         val phone = phone()
         val model = launch(phone)
@@ -103,6 +111,18 @@ class WatchModelTest {
         assertEquals(60, air.fanPercent)
         assertEquals(44, air.temperature)
         assertEquals(endsAt, air.endsAt)
+    }
+
+    @Test
+    fun aTimePickedOnTheWatchIsRememberedForTheBedJet() = runTest {
+        val phone = phone()
+        val model = launch(phone)
+        assertNull(model.snapshot.bedJets.first { it.id == mine.id }.pickedEndMinute)
+        model.send(WatchCommand.Remote(RemotePreset(Mode.COOL, minutes = 90, temperature = 44, fanPercent = 40), mine.id, endMinute = 480))
+        phone.finish()
+        // As the phone remembers it, so the Remote starts air there next time; the other side keeps its own.
+        assertEquals(480, model.snapshot.bedJets.first { it.id == mine.id }.pickedEndMinute)
+        assertNull(model.snapshot.bedJets.first { it.id == theirs.id }.pickedEndMinute)
     }
 
     private fun liveAir(id: String, model: WatchModel): LiveStatus.Air? =

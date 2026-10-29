@@ -99,7 +99,8 @@ class DeviceSelectionTest {
             prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE),
             linkPrefs = context.getSharedPreferences("$prefsName.link", Context.MODE_PRIVATE),
         )
-        return AppModel(context, LaunchOptions(), storage, demoMode = demo, makesLink = { unit(it.unit!!) }, discovery = { discovery })
+        // A starter schedule's wake time can be more than 16 hours away, which would make starting a night depend on the time of day.
+        return AppModel(context, LaunchOptions(noWakeTimes = true), storage, demoMode = demo, makesLink = { unit(it.unit!!) }, discovery = { discovery })
             .also { launched += it }
     }
 

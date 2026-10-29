@@ -34,6 +34,8 @@ final class VoiceOverTests: XCTestCase {
         try wait("the orb to read Heating") { self.element(prefix: "Heating, set to ") }
         try wait("Heat to be selected") { self.element("Heat").flatMap { $0.accessibilityTraits.contains(.selected) ? $0 : nil } }
 
+        // The timer starts as a duration, which is the default.
+        if let timerOption = element("Timer"), !timerOption.accessibilityTraits.contains(.selected) { activate(timerOption) }
         // Swiping down and up on the timer moves it a step at a time, and each step is read in words.
         try wait("the timer to read 4 hours") { self.element("Turns off in").flatMap { $0.accessibilityValue == "4 hours" ? $0 : nil } }
         let timer = try find("Turns off in")
@@ -42,6 +44,14 @@ final class VoiceOverTests: XCTestCase {
         try wait("the timer to read 3 hours, 55 minutes") { self.element("Turns off in").flatMap { $0.accessibilityValue == "3 hours, 55 minutes" ? $0 : nil } }
         try find("Turns off in").accessibilityIncrement()
         try wait("the timer to read 4 hours again") { self.element("Turns off in").flatMap { $0.accessibilityValue == "4 hours" ? $0 : nil } }
+
+        // Shown as a time instead: its name is read before the picker, and then how long is left.
+        activate(try find("Time"))
+        try wait("Time to be selected") { self.element("Time").flatMap { $0.accessibilityTraits.contains(.selected) ? $0 : nil } }
+        try wait("the time to show") { self.element("Turns off at") }
+        XCTAssertNotNil(element(prefix: "In "))
+        activate(try find("Timer"))
+        try wait("the timer again") { self.element("Turns off in") }
 
         let fan = try find("Fan")
         XCTAssertTrue(fan.accessibilityTraits.contains(.adjustable))
@@ -139,6 +149,43 @@ final class VoiceOverTests: XCTestCase {
         try wait("the duration to change") { self.element("Duration").flatMap { $0.accessibilityValue != before ? $0 : nil } }
         activate(try find("Done"))
         try wait("the editor again") { self.element("Schedule name") }
+
+        // The night ends at a wake time or runs from the usual bedtime, chosen as the Remote chooses Timer or Time. With a
+        // wake time the editor shows it under the usual bedtime, and the phases still read when they start on a usual night.
+        XCTAssertTrue(try find("Bedtime").accessibilityTraits.contains(.selected))
+        XCTAssertNotNil(element("Usual bedtime"))
+        func wakeTimes() -> Int { elements().filter { $0.accessibilityLabel == "Wake time" }.count }
+        XCTAssertEqual(wakeTimes(), 1, "only the switch's option")
+        activate(try find("Wake time"))
+        // The switch reads as chosen a moment before the card below it changes, so wait for the card.
+        try wait("the wake time to show") { wakeTimes() == 2 ? field : nil }
+        XCTAssertFalse(try find("Bedtime").accessibilityTraits.contains(.selected))
+        XCTAssertNotNil(element("Usual bedtime"))
+        let rows = elements().filter { $0.accessibilityHint == "Edits this phase" }
+        XCTAssertTrue(rows.allSatisfy { $0.accessibilityLabel?.contains(", starts ") == true }, "\(rows.map(\.accessibilityLabel))")
+        // The starter's opening phase keeps its length, read in its label.
+        let first = try find(prefix: "Phase 1, ").accessibilityLabel ?? ""
+        XCTAssertTrue(first.contains(", fixed length"), first)
+        let last = try XCTUnwrap(rows.last)
+        print("VO| last phase: \(last.accessibilityLabel ?? "")")
+        // The last is the only phase that stretches or shrinks, so its sheet reads its length without a slider to change it.
+        activate(last)
+        let fixed = try wait("the Fixed length switch") { self.element("Fixed length") }
+        let length = try find("Duration")
+        XCTAssertFalse(length.accessibilityTraits.contains(.adjustable), "the rest of the night can't be set")
+        XCTAssertNotNil(length.accessibilityValue)
+        // Its switch to keep its length reads its new state when double-tapped.
+        let was = fixed.accessibilityValue
+        activate(fixed)
+        try wait("the switch to turn on") { self.element("Fixed length").flatMap { $0.accessibilityValue != was ? $0 : nil } }
+        activate(try find("Done"))
+        try wait("the last phase to read as fixed") {
+            self.element { $0.accessibilityHint == "Edits this phase" && $0.accessibilityLabel?.hasPrefix("Phase \(rows.count), ") == true
+                && $0.accessibilityLabel?.contains(", fixed length") == true }
+        }
+        // Back on Bedtime, only the usual bedtime.
+        activate(try find("Bedtime"))
+        try wait("the wake time to go") { wakeTimes() == 1 ? field : nil }
 
         // Cancel drops the changes.
         if let cancel = element("Cancel"), cancel.accessibilityActivate() {

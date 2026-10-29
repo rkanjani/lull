@@ -59,6 +59,12 @@ final class WatchModelTests: XCTestCase {
         XCTAssertNil(model.errorMessage)
     }
 
+    func testTheRemoteRemembersShowingATime() {
+        XCTAssertFalse(launch().remoteShowsTime, "a duration, by default")
+        launch().remoteShowsTime = true
+        XCTAssertTrue(launch().remoteShowsTime, "remembered on the watch")
+    }
+
     func testAnErrandStaysBusyWhileItsSettingsChange() async {
         let model = launch()
         let cool = RemotePreset(mode: .cool, minutes: 30, temperature: 44, fanPercent: 40)
@@ -83,6 +89,16 @@ final class WatchModelTests: XCTestCase {
         XCTAssertEqual(air.fanPercent, 60)
         XCTAssertEqual(air.temperature, 44)
         XCTAssertEqual(air.endsAt, endsAt)
+    }
+
+    func testATimePickedOnTheWatchIsRememberedForTheBedJet() async throws {
+        let model = launch()
+        XCTAssertNil(model.snapshot.bedJets.first { $0.id == mine.id }?.pickedEndMinute)
+        await model.send(.remote(RemotePreset(mode: .cool, minutes: 90, temperature: 44, fanPercent: 40), mine.id, endMinute: 480))
+        phone.finish()
+        // As the iPhone remembers it, so the Remote starts air there next time; the other side keeps its own.
+        XCTAssertEqual(model.snapshot.bedJets.first { $0.id == mine.id }?.pickedEndMinute, 480)
+        XCTAssertNil(model.snapshot.bedJets.first { $0.id == theirs.id }?.pickedEndMinute)
     }
 
     private func liveAir(_ id: UUID, in model: WatchModel) -> (temperature: Int?, fanPercent: Int, endsAt: Date)? {

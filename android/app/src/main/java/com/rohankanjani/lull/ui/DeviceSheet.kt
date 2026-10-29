@@ -47,8 +47,6 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -242,25 +240,10 @@ private fun DeviceSettings(model: AppModel, bedJet: BedJet, showNearby: () -> Un
     Section(header = "App") {
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Temperature", fontSize = 17.sp, modifier = Modifier.weight(1f))
-            SingleChoiceSegmentedButtonRow(Modifier.width(140.dp)) {
-                listOf(true to "°F", false to "°C").forEachIndexed { index, (fahrenheit, label) ->
-                    SegmentedButton(
-                        selected = model.useFahrenheit == fahrenheit,
-                        onClick = { model.useFahrenheit = fahrenheit },
-                        shape = SegmentedButtonDefaults.itemShape(index, 2),
-                        icon = {},
-                        colors = SegmentedButtonDefaults.colors(
-                            activeContainerColor = Theme.neutral.copy(alpha = 0.5f),
-                            activeContentColor = Color.White,
-                            inactiveContainerColor = Theme.raised,
-                            inactiveContentColor = Color.White,
-                            activeBorderColor = Theme.hairline,
-                            inactiveBorderColor = Theme.hairline,
-                        ),
-                        modifier = Modifier.semantics { contentDescription = if (fahrenheit) "Fahrenheit" else "Celsius" },
-                    ) { Text(label) }
-                }
-            }
+            SegmentedChoice(
+                listOf(true to "°F", false to "°C"), model.useFahrenheit, { model.useFahrenheit = it }, Modifier.width(140.dp),
+                spoken = { fahrenheit -> if (fahrenheit) "Fahrenheit" else "Celsius" },
+            )
         }
         Toggle("Demo mode", model.demoMode) { model.demoMode = it }
     }
@@ -507,16 +490,3 @@ private fun Labeled(label: String, value: String, spoken: String = value) {
     HorizontalDivider(color = Theme.hairline)
 }
 
-@Composable
-private fun Toggle(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, fontSize = 17.sp)
-        Switch(
-            checked, onChange,
-            colors = SwitchDefaults.colors(
-                checkedTrackColor = Theme.green, checkedThumbColor = Color.White, checkedBorderColor = Theme.green,
-                uncheckedTrackColor = Theme.neutral.copy(alpha = 0.35f), uncheckedThumbColor = Color.White, uncheckedBorderColor = Color.Transparent,
-            ),
-        )
-    }
-}

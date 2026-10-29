@@ -204,14 +204,27 @@ data class WidgetBedJet(
     val generation: Generation = Generation.V3,
     /** The last two days of its history, for a Last Night widget set to it. */
     val recentHistory: List<HistoryEntry> = emptyList(),
+    /** The time of day last picked to turn the air off at, as a minute of the day, where the watch's Remote starts air. */
+    val pickedEndMinute: Int? = null,
 ) {
     /** What it is doing at `now`. Lull lets go of the BedJet when it leaves the screen, so this plays out by the clock. */
     fun live(now: Long): LiveStatus? = live?.takeIf { it.endsAt > now }
 }
 
-/** "7 hr 45 min · 4 phases" */
+/** How long the night runs, "7 hr 45 min", or "Until 6:30 AM" with a wake time, since then that depends on when it starts. */
+val Schedule.length: String
+    get() = wakeTime?.let { "Until ${Format.clock(it)}" } ?: Format.duration(totalMinutes)
+
+val Schedule.spokenLength: String
+    get() = wakeTime?.let { "until ${Format.clock(it)}" } ?: Format.spokenDuration(totalMinutes)
+
+/** Short enough for a small widget or complication: "7h 45m", or the wake time. */
+val Schedule.shortLength: String
+    get() = wakeTime?.let { Format.clock(it) } ?: Format.shortDuration(totalMinutes)
+
+/** "7 hr 45 min · 4 phases", or "Until 6:30 AM · 4 phases" */
 val Schedule.summary: String
-    get() = "${Format.duration(totalMinutes)} · ${phases.size} ${if (phases.size == 1) "phase" else "phases"}"
+    get() = "$length · ${phases.size} ${if (phases.size == 1) "phase" else "phases"}"
 
 val Schedule.spokenSummary: String
-    get() = "${Format.spokenDuration(totalMinutes)}, ${phases.size} ${if (phases.size == 1) "phase" else "phases"}"
+    get() = "$spokenLength, ${phases.size} ${if (phases.size == 1) "phase" else "phases"}"

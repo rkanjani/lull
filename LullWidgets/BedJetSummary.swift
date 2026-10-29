@@ -101,7 +101,7 @@ struct BedJetSummary: View {
                         .accessibilityHidden(true)
                 }
                 HStack(alignment: .center) {
-                    Text(Format.duration(schedule.totalMinutes))
+                    Text(schedule.length)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Theme.secondary)
                         .monospacedDigit()

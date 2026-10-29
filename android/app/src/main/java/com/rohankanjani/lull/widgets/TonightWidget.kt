@@ -44,6 +44,7 @@ import com.rohankanjani.lull.Schedule
 import com.rohankanjani.lull.WidgetSnapshot
 import com.rohankanjani.lull.activity
 import com.rohankanjani.lull.bedjetkit.Mode
+import com.rohankanjani.lull.length
 import com.rohankanjani.lull.spokenSummary
 import com.rohankanjani.lull.summary
 import com.rohankanjani.lull.ui.Theme
@@ -177,7 +178,7 @@ private fun Planned(snapshot: WidgetSnapshot, schedule: Schedule, now: Long) {
             Spacer(GlanceModifier.defaultWeight())
             WidgetCurve(schedule.phases, curveWidth, 40.dp, lineWidth = 2.5f)
             Spacer(GlanceModifier.defaultWeight())
-            Text(Format.duration(schedule.totalMinutes), style = widgetText(13.sp, weight = FontWeight.Medium), maxLines = 1)
+            Text(schedule.length, style = widgetText(13.sp, weight = FontWeight.Medium), maxLines = 1)
             Text("Tap to start", style = widgetText(11.sp, Theme.secondary, FontWeight.Medium), maxLines = 1)
         }
         return
@@ -204,7 +205,8 @@ private fun Planned(snapshot: WidgetSnapshot, schedule: Schedule, now: Long) {
         Text(schedule.summary, style = widgetText(11.sp, Theme.secondary, FontWeight.Medium), maxLines = 1)
         if (isLarge) {
             Gap(10.dp)
-            PhaseList(snapshot, schedule, now, current = null)
+            // Started now: with a wake time, the last phase runs until it from now.
+            PhaseList(snapshot, schedule.resolved(startingAt = Format.minuteOfDay(now)), now, current = null)
         }
     }
 }

@@ -20,6 +20,9 @@ final class WatchMessagesTests: XCTestCase {
             // From the watch's Remote, which says what was changed on it.
             (.remote(cool, side, changed: [.time, .fan]),
              #"{"bedJet":"6B0D4C2E-1A55-4D8E-9C71-0F2A7E3B5D10","changed":["fan","time"],"fanPercent":40,"kind":"remote","minutes":30,"mode":"cool","temperature":44}"#),
+            // With a time picked on it to turn off at, for the phone to remember.
+            (.remote(cool, side, changed: [.time], endMinute: 480),
+             #"{"bedJet":"6B0D4C2E-1A55-4D8E-9C71-0F2A7E3B5D10","changed":["time"],"endMinute":480,"fanPercent":40,"kind":"remote","minutes":30,"mode":"cool","temperature":44}"#),
             (.refresh, #"{"kind":"refresh"}"#),
         ]
         for (command, json) in cases {
@@ -47,6 +50,14 @@ final class WatchMessagesTests: XCTestCase {
         let cool = RemotePreset(mode: .cool, minutes: 30, temperature: 44, fanPercent: 40)
         let json = #"{"changed":["fan","sparkle"],"fanPercent":40,"kind":"remote","minutes":30,"mode":"cool","temperature":44}"#
         XCTAssertEqual(WatchCommand(data: Data(json.utf8)), .remote(cool, nil, changed: [.fan]))
+    }
+
+    func testATimeThatIsntAMinuteOfTheDayIsLeftOut() {
+        let cool = RemotePreset(mode: .cool, minutes: 30, temperature: 44, fanPercent: 40)
+        for end in ["1440", "-1", "\"8:00\"", "7.5", "null"] {
+            let json = #"{"endMinute":"# + end + #","fanPercent":40,"kind":"remote","minutes":30,"mode":"cool","temperature":44}"#
+            XCTAssertEqual(WatchCommand(data: Data(json.utf8)), .remote(cool, nil), end)
+        }
     }
 
     func testIgnoresWhatItDoesntUnderstand() {

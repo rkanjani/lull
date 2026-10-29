@@ -5,9 +5,12 @@ import SwiftUI
 struct RemoteView: View {
     @Environment(AppModel.self) private var model
     @Environment(BedJet.self) private var bedJet
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var temperature = 60
     @State private var fan = 40.0
     @State private var runtime = 60.0
+    /// When the air turns off, as a minute of the day, for the Remote showing it as a time.
+    @State private var endMinute = 0
     /// While a slider is in use, and briefly after, it leads and the BedJet's reports are not applied to it.
     @State private var followAfter = Date.distantPast
     @State private var pending: [String: Task<Void, Never>] = [:]
@@ -50,11 +53,7 @@ struct RemoteView: View {
                             await bedJet.setFan(percent: Int(fan))
                         }, range: 5...100, step: 5, tint: mode.tint)
                         if bedJet.run == nil {
-                            let limit = runtimeLimit(status)
-                            LabeledSlider(title: "Turns off in", valueText: Format.duration(Int(runtime)),
-                                          spokenValue: Format.spokenDuration(Int(runtime)), value: sending($runtime, "runtime") {
-                                await bedJet.setRuntime(minutes: Int(runtime))
-                            }, range: limit.range, step: limit.step)
+                            turnsOff(status)
                         } else {
                             // A schedule sets its own timing, so this is read-only until it ends.
                             ValueHeader(title: "Phase ends in", value: Format.duration(minutesLeft(status)))
@@ -83,6 +82,7 @@ struct RemoteView: View {
             fan = Double(status.fanPercent)
             let limit = runtimeLimit(status)
             runtime = min(max(Double(minutesLeft(status)), limit.range.lowerBound), limit.range.upperBound)
+            endMinute = Format.endMinute(after: status.remainingSeconds, from: Date())
         }
         .onChange(of: bedJet.id) {
             // Another BedJet's settings show straight away, and a slider change still on its way is dropped
@@ -109,6 +109,74 @@ struct RemoteView: View {
                 await send()
             }
         }
+    }
+
+    /// When the air turns off: after a duration, the default, or at a time of day. Choosing one only changes what's
+    /// shown, since the BedJet counts down either way.
+    @ViewBuilder private func turnsOff(_ status: DeviceStatus) -> some View {
+        Picker("Turns off", selection: Binding { model.remoteTimerShowsTime } set: { model.remoteTimerShowsTime = $0 }) {
+            Text("Timer").tag(false)
+            Text("Time").tag(true)
+        }
+        .pickerStyle(.segmented)
+        // Both are laid out, the one not chosen hidden, so the card keeps one height and nothing on the screen moves
+        // when switching. The hidden one can't be seen, touched or read.
+        let showsTime = model.remoteTimerShowsTime
+        ZStack(alignment: .topLeading) {
+            timerSlider(status)
+                .opacity(showsTime ? 0 : 1)
+                .allowsHitTesting(!showsTime)
+                .accessibilityHidden(showsTime)
+            timeRow(status)
+                .opacity(showsTime ? 1 : 0)
+                .allowsHitTesting(showsTime)
+                .accessibilityHidden(!showsTime)
+        }
+    }
+
+    private func timerSlider(_ status: DeviceStatus) -> some View {
+        let limit = runtimeLimit(status)
+        return LabeledSlider(title: "Turns off in", valueText: Format.duration(Int(runtime)),
+                             spokenValue: Format.spokenDuration(Int(runtime)), value: sending($runtime, "runtime") {
+            await bedJet.setRuntime(minutes: Int(runtime))
+        }, range: limit.range, step: limit.step, headerMinHeight: timeRowHeight)
+    }
+
+    private func timeRow(_ status: DeviceStatus) -> some View {
+        let picked = sending($endMinute, "runtime") {
+            await bedJet.setRuntime(until: Format.date(atNext: endMinute, after: Date()))
+        }
+        // At the largest text sizes the time goes under its label rather than squeezing it into a sliver.
+        let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout())
+        return VStack(alignment: .leading, spacing: 8) {
+            layout {
+                // Read before the picker, which VoiceOver calls only "Time Picker".
+                Text("Turns off at").scaledFont(15, .medium).foregroundStyle(Theme.secondary)
+                Spacer(minLength: 0)
+                DatePicker("Turns off at", selection: timeOfDayBinding(get: { picked.wrappedValue }, set: { picked.wrappedValue = $0 }),
+                           displayedComponents: .hourAndMinute)
+                    .labelsHidden()
+            }
+            // As tall as the timer's heading, so "Turns off" stays put when switching between them.
+            .frame(minHeight: timeRowHeight)
+            Text(turnsOffCaption(status))
+                .scaledFont(13)
+                .foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// How long until the air turns off, or why it turns off sooner than the time picked.
+    private func turnsOffCaption(_ status: DeviceStatus) -> String {
+        let cutShort: Bool
+        if case .until(let end) = bedJet.remoteTimer, bedJet.remoteTimer.isAhead {
+            cutShort = end.timeIntervalSinceNow > Double(status.remainingSeconds + 60)
+        } else {
+            cutShort = false
+        }
+        guard cutShort else { return "In \(Format.duration(minutesLeft(status)))." }
+        let longest = status.maxRuntimeMinutes > 0 ? status.maxRuntimeMinutes : status.mode.maxMinutes
+        return "\(status.mode.title) runs for up to \(Format.duration(longest)), so it turns off at \(Format.clock(endMinute))."
     }
 
     private func minutesLeft(_ status: DeviceStatus) -> Int {

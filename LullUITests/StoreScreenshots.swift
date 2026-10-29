@@ -12,7 +12,7 @@ final class StoreScreenshots: XCTestCase {
         folder = URL(fileURLWithPath: path!)
         continueAfterFailure = false
         // A night that is already a few hours in shows more than one that has just begun.
-        app.launchArguments = ["-ephemeral", "-demoElapsedMinutes", "200", "-demoLabelConnected"]
+        app.launchArguments = ["-ephemeral", "-noWakeTimes", "-demoElapsedMinutes", "200", "-demoLabelConnected"]
         app.launch()
     }
 
@@ -26,6 +26,9 @@ final class StoreScreenshots: XCTestCase {
         XCTAssertTrue(heat.waitForExistence(timeout: 10))
         sleep(2)
         heat.tap()
+        // A duration, the default, whatever an earlier run left chosen: the choice is kept even with `-ephemeral`.
+        let timerOption = app.buttons["Timer"]
+        if timerOption.waitForExistence(timeout: 5), !timerOption.isSelected { timerOption.tap() }
         let timer = app.sliders["Turns off in"]
         XCTAssertTrue(timer.waitForExistence(timeout: 5))
         expectation(for: NSPredicate(format: "value == '4 hours'"), evaluatedWith: timer)

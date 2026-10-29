@@ -133,6 +133,27 @@ final class CodecTests: XCTestCase {
         XCTAssertEqual(latest?.extra?.programStep, 1)
     }
 
+    @MainActor
+    func testClockTimeStepsEndAtTheirTimeOnTheSimulatedDevice() async throws {
+        let link = DemoLink()
+        var latest: DeviceStatus?
+        link.onStatus = { latest = $0 }
+        let wake = ProgramStep(mode: .cool, fanStep: 5, temperature: 44, hours: 6, minutes: 30, endsAtClockTime: true)
+        try await link.store(StoredProgram(name: "Wake", steps: [wake]), slot: 0)
+        // Sent by hand: `startProgram` would set the unit's clock to now.
+        try await link.send(Codec.setClock(hour: 22, minute: 30))
+        try await link.send(Codec.startProgram(slot: 0))
+        XCTAssertEqual(latest?.remainingSeconds, 8 * 3600, "from 22:30 to 6:30")
+        let pastMidnight = ProgramStep(mode: .cool, fanStep: 5, temperature: 44, hours: 0, minutes: 10, endsAtClockTime: true)
+        try await link.store(StoredProgram(name: "Late", steps: [pastMidnight]), slot: 1)
+        try await link.send(Codec.setClock(hour: 23, minute: 50))
+        try await link.send(Codec.startProgram(slot: 1))
+        XCTAssertEqual(latest?.remainingSeconds, 20 * 60, "from 23:50 to 0:10")
+        // A demo that pretends the night started earlier still ends it at the time of day.
+        link.skipAhead(minutes: 5)
+        XCTAssertEqual(latest?.remainingSeconds ?? 0, 20 * 60, accuracy: 1)
+    }
+
     /// Values follow the heat table in the official BedJet app (v1.0.6), which keeps the unit's safety cut-off.
     func testHeatIsCutOffSoonerWhenHotterAndFaster() {
         XCTAssertEqual(ProgramStep.longestMinutes(mode: .heat, temperature: 80, fanStep: 19), 60)

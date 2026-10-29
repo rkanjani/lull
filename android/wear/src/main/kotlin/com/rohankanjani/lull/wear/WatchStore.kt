@@ -11,6 +11,8 @@ interface WatchStore {
     var picked: String?
     /** When the watch last asked the phone what the BedJets are doing. */
     var askedAt: Long?
+    /** Whether the Remote page shows when air turns off as a time of day rather than a duration. */
+    var remoteShowsTime: Boolean
     fun load(): WidgetSnapshot?
     fun save(snapshot: WidgetSnapshot)
 }
@@ -30,6 +32,10 @@ class DeviceStore(context: Context, private val saves: Boolean = true) : WatchSt
     override var askedAt: Long?
         get() = prefs.getLong("askedAt", 0).takeIf { it > 0 }
         set(value) = prefs.edit().putLong("askedAt", value ?: 0).apply()
+
+    override var remoteShowsTime: Boolean
+        get() = prefs.getBoolean("remoteShowsTime", false)
+        set(value) = prefs.edit().putBoolean("remoteShowsTime", value).apply()
 
     override fun load(): WidgetSnapshot? = if (saves) WidgetSnapshot.load(context) else null
 

@@ -22,6 +22,8 @@ final class DeviceSelectionTests: XCTestCase {
     private var setups: [UUID: (FakeLink) -> Void] = [:]
 
     override func setUp() async throws {
+        // A starter schedule's wake time can be more than 16 hours away, which would make starting a night depend on the time of day.
+        AppModel.startsWithoutWakeTimes = true
         directory = FileManager.default.temporaryDirectory.appending(path: "DeviceSelectionTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defaults = UserDefaults(suiteName: "DeviceSelectionTests-\(UUID().uuidString)")
@@ -31,6 +33,7 @@ final class DeviceSelectionTests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        AppModel.startsWithoutWakeTimes = ProcessInfo.processInfo.arguments.contains("-noWakeTimes")
         for unit in units.values { unit.stop() }
         try? FileManager.default.removeItem(at: directory)
     }

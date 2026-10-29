@@ -13,7 +13,7 @@ final class AccessibilityTests: XCTestCase {
     }
 
     private func launch(textSize: String? = nil) {
-        app.launchArguments = ["-ephemeral", "-demoHistory"]
+        app.launchArguments = ["-ephemeral", "-noWakeTimes", "-demoHistory"]
         if let textSize {
             self.textSize = textSize
             isLarge = true
@@ -70,15 +70,6 @@ final class AccessibilityTests: XCTestCase {
         }
     }
 
-    /// Scrolls until the element can be tapped, down first and then back up.
-    @discardableResult
-    private func reveal(_ element: XCUIElement) -> XCUIElement {
-        for _ in 0..<5 where !(element.exists && element.isHittable) { app.swipeUp() }
-        for _ in 0..<10 where !(element.exists && element.isHittable) { app.swipeDown() }
-        sleep(1)
-        return element
-    }
-
     private func element(_ predicate: String) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: predicate)).firstMatch
     }
@@ -99,24 +90,33 @@ final class AccessibilityTests: XCTestCase {
         XCTAssertTrue(element("label BEGINSWITH 'Off, room'").waitForExistence(timeout: 10))
         try audit("remote-off")
 
-        reveal(heat).tap()
+        app.reveal(heat).tap()
+        // A duration, the default, whatever an earlier run left chosen: the choice is kept even with `-ephemeral`.
+        let timerOption = app.buttons["Timer"]
+        if timerOption.waitForExistence(timeout: 5), !timerOption.isSelected { app.reveal(timerOption).tap() }
         let timer = app.sliders["Turns off in"]
         XCTAssertTrue(timer.waitForExistence(timeout: 5))
         expectation(for: NSPredicate(format: "value == '4 hours'"), evaluatedWith: timer)
         waitForExpectations(timeout: 5)
         XCTAssertTrue(element("label BEGINSWITH 'Heating, set to'").exists)
         try audit("remote-heat")
-        reveal(app.buttons["Off"]).tap()
+        // Shown as a time, then back to the default for the rest of the walk and later launches.
+        app.reveal(app.buttons["Time"]).tap()
+        XCTAssertTrue(app.staticTexts["Turns off at"].waitForExistence(timeout: 5))
+        try audit("remote-time")
+        app.reveal(app.buttons["Timer"]).tap()
+        XCTAssertTrue(app.sliders["Turns off in"].waitForExistence(timeout: 5))
+        app.reveal(app.buttons["Off"]).tap()
 
-        reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'BedJet,'")).firstMatch).tap()
+        app.reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'BedJet,'")).firstMatch).tap()
         XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5))
         try audit("device")
         // BedJets nearby, each row read with its kind and signal.
-        reveal(app.buttons["Add Another BedJet"]).tap()
+        app.reveal(app.buttons["Add Another BedJet"]).tap()
         XCTAssertTrue(element("label == 'BEDJET-DEMO · 5F2C, BedJet 3, fair signal'").waitForExistence(timeout: 5))
         try audit("nearby")
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        reveal(app.buttons["Done"]).tap()
+        app.reveal(app.buttons["Done"]).tap()
 
         app.tabBars.buttons["Schedule"].tap()
         let start = app.buttons["Start Night"]
@@ -126,33 +126,49 @@ final class AccessibilityTests: XCTestCase {
         try audit("schedule")
         expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: start)
         waitForExpectations(timeout: 10)
-        reveal(start).tap()
+        app.reveal(start).tap()
         let end = app.buttons["End Night"]
         XCTAssertTrue(end.waitForExistence(timeout: 10))
         XCTAssertTrue(element("label BEGINSWITH 'Cooling,' AND label ENDSWITH 'left'").exists)
         try audit("schedule-running")
-        reveal(end).tap()
+        app.reveal(end).tap()
         XCTAssertTrue(start.waitForExistence(timeout: 10))
 
-        reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Warm Welcome,'")).firstMatch).tap()
+        app.reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Warm Welcome,'")).firstMatch).tap()
         XCTAssertTrue(app.buttons["Add Phase"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.textFields["Schedule name"].exists)
         try audit("editor")
         let second = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Phase 2, Heat,' AND label CONTAINS '30 minutes, starts'")).firstMatch
-        XCTAssertTrue(reveal(second).exists)
+        XCTAssertTrue(app.reveal(second).exists)
         second.tap()
         XCTAssertTrue(app.buttons["Remove Phase"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.sliders["Duration"].value as? String, "30 minutes")
         try audit("phase-editor", overSheet: true)
-        reveal(app.buttons["Done"]).tap()
-        reveal(app.buttons["Cancel"]).tap()
+        app.reveal(app.buttons["Done"]).tap()
+        // With a wake time the editor shows it under the usual bedtime, and each phase's sheet has a Fixed length switch.
+        let wakeTime = app.buttons["Wake time"]
+        app.reveal(wakeTime).tap()
+        expectation(for: NSPredicate(format: "isSelected == true"), evaluatedWith: wakeTime)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(app.staticTexts["Wake time"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Usual bedtime"].exists)
+        // Back to the top, so the Night card is audited whole rather than with its switch half under the bar.
+        app.swipeDown()
+        try audit("editor-wake-time")
+        let last = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Phase 4,' AND label CONTAINS 'fixed length'")).firstMatch
+        XCTAssertTrue(app.reveal(last).exists)
+        last.tap()
+        XCTAssertTrue(app.reveal(app.switches["Fixed length"]).exists)
+        try audit("phase-editor-wake-time", overSheet: true)
+        app.reveal(app.buttons["Done"]).tap()
+        app.reveal(app.buttons["Cancel"]).tap()
 
         app.tabBars.buttons["History"].tap()
         // A night without a schedule is summed up by its times, read as a range rather than a dash.
         let night = app.buttons.matching(NSPredicate(format: "identifier == 'Night' AND label CONTAINS ' to '")).firstMatch
         XCTAssertTrue(night.waitForExistence(timeout: 5))
         XCTAssertEqual(night.value as? String, "Collapsed")
-        reveal(night).tap()
+        app.reveal(night).tap()
         XCTAssertTrue(app.staticTexts["Turned off"].waitForExistence(timeout: 5))
         XCTAssertEqual(night.value as? String, "Expanded")
         try audit("history")

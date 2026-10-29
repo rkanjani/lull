@@ -3,11 +3,15 @@ package com.rohankanjani.lull
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isEnabled
 import androidx.compose.ui.test.isRoot
+import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.accessibility.enableAccessibilityChecks
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -55,12 +59,23 @@ class AccessibilityTest {
             audit()
 
             compose.onNodeWithText("Heat").performScrollTo().performClick()
+            compose.showTimer()
             compose.waitForSlider("Turns off in", "4 hours")
             compose.onNode(hasContentDescription("Heating, set to", substring = true)).assertExists()
             audit()
+            // Shown as a time: the option reads as selected, the time with its name, then how long is left.
+            compose.onNodeWithText("Time").performScrollTo().performClick()
+            compose.waitFor(hasContentDescription("Turns off at, ", substring = true))
+            compose.onNodeWithText("Time").assertIsSelected()
+            compose.onNode(hasText("In ", substring = true)).assertExists()
+            audit()
+            // Back to the default for the rest of the walk and later launches.
+            compose.onNodeWithText("Timer").performScrollTo().performClick()
+            compose.waitFor(hasContentDescription("Turns off in"))
             compose.onNodeWithText("Off").performScrollTo().performClick()
 
-            compose.onNode(hasContentDescription("BedJet,", substring = true)).performClick()
+            // At the largest text sizes the Remote runs past the screen, so its top may have scrolled away.
+            compose.onNode(hasContentDescription("BedJet,", substring = true)).performScrollTo().performClick()
             compose.waitFor(hasText("Done"))
             audit()
             // BedJets nearby, each row read with its kind and signal.
@@ -94,6 +109,32 @@ class AccessibilityTest {
             audit()
             compose.onNodeWithText("Done").performClick()
             compose.waitUntilGone(hasText("Remove Phase"))
+            // The night ends at a wake time or runs from the usual bedtime, chosen as the Remote chooses Timer or Time. With a
+            // wake time the editor shows it under the usual bedtime, and the phases still read when they start on a usual night.
+            compose.onNodeWithText("Bedtime").assertIsSelected()
+            compose.onNode(hasContentDescription("Wake time, ", substring = true)).assertDoesNotExist()
+            compose.onNodeWithText("Wake time").performScrollTo().performClick()
+            compose.waitFor(hasContentDescription("Wake time, ", substring = true))
+            compose.onNode(hasContentDescription("Usual bedtime, ", substring = true)).assertExists()
+            compose.onAllNodes(hasContentDescription("Phase ", substring = true) and hasContentDescription(", starts ", substring = true))
+                .assertCountEquals(4)
+            val last = hasContentDescription("Phase 4,", substring = true)
+            // The starter's closing warm-up keeps its length, read in its label.
+            compose.onNode(last and hasContentDescription(", fixed length", substring = true)).assertExists()
+            audit()
+            // Its sheet has a switch to keep its length, read as one control.
+            compose.onNode(last).performScrollTo().performClick()
+            compose.waitFor(hasText("Fixed length") and isToggleable())
+            // At the largest text sizes the sheet scrolls to reach it.
+            compose.onNode(hasText("Fixed length") and isToggleable()).performScrollTo()
+            audit()
+            compose.onNode(hasText("Fixed length") and isToggleable()).performClick()
+            compose.onNodeWithText("Done").performScrollTo().performClick()
+            compose.waitUntilGone(hasText("Remove Phase"))
+            compose.waitFor(hasContentDescription("Phase 4,", substring = true) and !hasContentDescription(", fixed length", substring = true))
+            // Back on Bedtime, only the usual bedtime.
+            compose.onNodeWithText("Bedtime").performScrollTo().performClick()
+            compose.waitUntilGone(hasContentDescription("Wake time, ", substring = true))
             compose.onNodeWithText("Cancel").performClick()
 
             compose.onNodeWithText("History").performClick()

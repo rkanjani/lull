@@ -7,6 +7,7 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -32,11 +33,14 @@ sealed interface WatchCommand {
     /**
      * Sets a BedJet as the Remote does: a mode, and the temperature, fan and timer to run it at. From the watch's
      * Remote, only the settings changed there are sent on; null sets them all, as a Quick Remote button does.
+     * [endMinute] is a time of day picked there to turn off at, which the phone remembers for the next time the air is
+     * turned on. The timer itself is still set by the preset's minutes.
      */
     data class Remote(
         val preset: RemotePreset,
         override val bedJet: String? = null,
         val changed: Set<RemoteSetting>? = null,
+        val endMinute: Int? = null,
     ) : WatchCommand
 
     /** Asks what the BedJets are doing now, for a watch that hasn't heard in a while. */
@@ -58,6 +62,7 @@ sealed interface WatchCommand {
             if (this@WatchCommand is Remote) changed?.let { changed ->
                 put("changed", buildJsonArray { RemoteSetting.entries.filter { it in changed }.forEach { add(it.wireName) } })
             }
+            if (this@WatchCommand is Remote) endMinute?.let { put("endMinute", it) }
             if (this@WatchCommand is Remote) put("fanPercent", preset.fanPercent)
             put("kind", kind)
             if (this@WatchCommand is Remote) {
@@ -92,7 +97,9 @@ sealed interface WatchCommand {
                     val changed = values["changed"]?.jsonArray?.mapNotNull { name ->
                         RemoteSetting.entries.firstOrNull { it.wireName == name.jsonPrimitive.also { require(it.isString) }.content }
                     }?.toSet()
-                    Remote(preset, bedJet, changed)
+                    // Only a minute of the day: anything else is left out, as the timer is set by the minutes either way.
+                    val endMinute = (values["endMinute"] as? JsonPrimitive)?.takeIf { !it.isString }?.intOrNull?.takeIf { it in 0 until 1440 }
+                    Remote(preset, bedJet, changed, endMinute)
                 }
                 else -> null
             }

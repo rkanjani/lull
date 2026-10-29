@@ -15,8 +15,11 @@ struct SavedBedJet: Codable {
     var run: ActiveRun?
     var slot: Int?
     /// How the Remote's timer was left, so a time picked there survives Lull being closed while the air runs.
+    var remoteTimer: RemoteTimer?
     var longestEnds: Date?
     var timerEnds: Date?
+    /// The time of day last picked to turn the air off at, which the Remote aims at again the next time it's turned on.
+    var pickedEndMinute: Int?
 }
 
 /// One BedJet Lull knows: its connection, what it reports, the schedule running on it and what it did.
@@ -67,12 +70,18 @@ final class BedJet: Identifiable {
     @ObservationIgnored private weak var app: AppModel?
     private var link: BedJetLink?
     private var lastRefresh = Date.distantPast
-    /// When the longest run Lull gave the air from the Remote ends. Changing the temperature or fan keeps to it, and
-    /// picking a time clears it, so the timer then counts down as it is.
+    /// How air from the Remote is timed. Schedules keep their own timing. Saved, so a time picked there holds after the
+    /// phone closes Lull while the air runs.
+    private(set) var remoteTimer = RemoteTimer.longest { didSet { if remoteTimer != oldValue { app?.save() } } }
+    /// When the longest run Lull gave the air from the Remote ends, which changing the temperature or fan keeps to.
     private var longestEnds: Date? { didSet { app?.save() } }
     /// When the BedJet's timer, as Lull last left it, runs out. A timer that no longer ends then was changed from
     /// another phone or the BedJet's own remote.
     private var timerEnds: Date? { didSet { app?.save() } }
+    /// The time of day last picked to turn the air off at, on the Remote or a watch's, as a minute of the day. Turned on
+    /// again from the Remote, shown as a time, the air turns off when the clock next shows it: a wake time usually stays
+    /// the same from night to night while bedtimes move.
+    private(set) var pickedEndMinute: Int? { didSet { if pickedEndMinute != oldValue { app?.save() } } }
     private var timePickedAt = Date.distantPast
     /// When a fan or temperature change from this phone cleared `timerEnds` to read it back.
     private var readingTimerBackSince = Date.distantPast
@@ -91,7 +100,7 @@ final class BedJet: Identifiable {
 
     var saved: SavedBedJet {
         SavedBedJet(id: id, unit: unit, name: name, nickname: nickname, generation: knownGeneration, tonightID: tonightID, run: run, slot: slot,
-                    longestEnds: longestEnds, timerEnds: timerEnds)
+                    remoteTimer: remoteTimer, longestEnds: longestEnds, timerEnds: timerEnds, pickedEndMinute: pickedEndMinute)
     }
 
     var tonight: Schedule? {
@@ -119,9 +128,11 @@ final class BedJet: Identifiable {
         tonightID = saved.tonightID
         run = saved.run.flatMap { $0.endsAt > Date() ? $0 : nil }
         slot = saved.slot
+        remoteTimer = saved.remoteTimer ?? .longest
         // Only a timer Lull finished setting is kept to; one it was still reading back when Lull closed is left alone.
         timerEnds = Self.plausible(saved.timerEnds)
         longestEnds = timerEnds == nil ? nil : Self.plausible(saved.longestEnds)
+        pickedEndMinute = saved.pickedEndMinute.flatMap { (0..<1440).contains($0) ? $0 : nil }
         self.app = app
         loadHistory()
         if let ended = saved.run, run == nil {
@@ -283,8 +294,14 @@ final class BedJet: Identifiable {
         isSavingSchedule = true
         defer { isSavingSchedule = false }
         await perform {
+            // Demos that show a night in progress pretend it started earlier.
+            let elapsed = link is DemoLink ? AppModel.demoElapsedMinutes : 0
+            let startedAt = Date().addingTimeInterval(TimeInterval(-elapsed * 60))
             // Known for certain once connected, which `perform` waited for; checked before anything is written.
-            if let problem = self.problem(running: schedule) { throw BedJetError.invalidProgram(problem) }
+            if let problem = self.problem(running: schedule, at: startedAt) { throw BedJetError.invalidProgram(problem) }
+            // With a wake time, every phase is scaled to end at it from now. A BedJet 3 is still given the wake time itself for
+            // the last step, so it keeps to it by its own clock.
+            let tonight = schedule.resolved(startingAt: Format.minuteOfDay(startedAt))
             // A V2 holds just the one sequence, which Lull always replaces.
             let slot: Int
             if link.generation == .v2 {
@@ -301,16 +318,14 @@ final class BedJet: Identifiable {
             // A command in flight finishes even once it's cancelled, so what comes after it is checked for: an errand
             // iOS ran out of background time for, which may only carry on hours later, writes nothing more.
             try Task.checkCancellation()
-            try await link.store(schedule.program, slot: slot)
+            try await link.store(tonight.program, slot: slot)
             try Task.checkCancellation()
             try await link.startProgram(slot: slot)
             try await self.confirmStarted()
-            self.run = ActiveRun(schedule: schedule, startedAt: Date())
-            self.record(.scheduleStarted(name: schedule.name, phases: schedule.phases))
-            if let demo = link as? DemoLink, AppModel.demoElapsedMinutes > 0 {
-                demo.skipAhead(minutes: AppModel.demoElapsedMinutes)
-                self.run?.startedAt = Date().addingTimeInterval(TimeInterval(-AppModel.demoElapsedMinutes * 60))
-            }
+            self.run = ActiveRun(schedule: tonight, startedAt: startedAt)
+            self.remoteTimer = .longest
+            self.record(.scheduleStarted(name: schedule.name, phases: tonight.phases))
+            if elapsed > 0, let demo = link as? DemoLink { demo.skipAhead(minutes: elapsed) }
             try? await self.refreshSlots()
         }
     }
@@ -358,6 +373,17 @@ final class BedJet: Identifiable {
         // time picked while another phone hands the BedJet over comes after this tap.
         let endingSchedule = run?.schedule.name
         let asked = Date()
+        // Shown as a time, the end on screen holds across modes: a time picked here, or else the BedJet's own countdown,
+        // such as a duration picked here or a timer set on another phone. With no end on screen, the air turns off at the
+        // time last picked, the next time the clock shows it.
+        if app?.remoteTimerShowsTime == true, mode != .standby, !remoteTimer.isAhead, run == nil, runningElsewhereStep == nil {
+            if let status, status.isRunning, status.remainingSeconds > 60 {
+                // Counted from when the BedJet said it, so a report from a while ago doesn't move the end later.
+                remoteTimer = .until((statusReceivedAt ?? Date()).addingTimeInterval(TimeInterval(status.remainingSeconds)))
+            } else if let pickedEndMinute {
+                remoteTimer = .until(Format.date(atNext: pickedEndMinute, after: asked))
+            }
+        }
         await perform {
             // Until the new mode is given its own run, a fan or temperature change leaves the timer alone.
             self.forgetRemoteTimer()
@@ -368,6 +394,9 @@ final class BedJet: Identifiable {
             self.turnedOffAt = mode == .standby ? Date() : nil
             self.run = nil
             if let endingSchedule { self.record(.scheduleEnded(name: endingSchedule, ending: .byYou)) }
+            // A time picked on the Remote holds across modes until it passes, while the Remote shows the time. Otherwise each
+            // mode starts at its longest run, as the timer always has.
+            if mode == .standby || !self.remoteTimer.isAhead || self.app?.remoteTimerShowsTime != true { self.remoteTimer = .longest }
             if mode != .standby { try await self.extendRuntime(entering: mode, askedAt: asked) }
         }
     }
@@ -397,20 +426,54 @@ final class BedJet: Identifiable {
     func setRuntime(minutes: Int) async {
         guard let link else { return }
         // From now on the timer counts down as it is: nothing on this phone changes it until a mode is chosen.
-        longestEnds = nil
+        remoteTimer = .picked
         timePickedAt = Date()
         await perform { try await link.setRuntime(minutes: minutes) }
     }
 
-    /// Whether changing the temperature or fan should keep the timer to the end Lull gave it. Asked before the change
-    /// is sent, since in Heat a hotter setting can cut the BedJet's timer by itself. A timer set from another phone or
-    /// the BedJet's own remote since Lull last set it is theirs, and Lull stops keeping to it from then on.
+    /// Turns the air off at `end`, or as near it as the mode allows. Lull keeps aiming at it as the temperature and fan
+    /// change, since each changes how long the BedJet lets the air run, and as the mode changes while the Remote shows
+    /// the time.
+    func setRuntime(until end: Date) async {
+        guard let link else { return }
+        remoteTimer = .until(end)
+        pickedEndMinute = Format.minuteOfDay(end)
+        let asked = Date()
+        timePickedAt = asked
+        await perform {
+            // Sent at once, as far as the BedJet last said the mode may run. A hotter setting still on its way can cut
+            // that short, so like a fan or temperature change, the timer is read back from the BedJet's next report and
+            // aimed again, rather than taken to be what was sent.
+            self.readTimerBack()
+            let limit = self.status.map { $0.maxRuntimeMinutes > 0 ? $0.maxRuntimeMinutes : $0.mode.maxMinutes } ?? Limits.maxStepMinutes
+            try await link.setRuntime(minutes: self.minutes(until: end, limit: limit))
+            // Sent, the time is the BedJet's, so moving on from the Remote (switching BedJet, a newer pick) doesn't stop it
+            // being read back. Left unread, the next change couldn't tell it from another phone's timer.
+            try await Task { try await self.extendRuntime(askedAt: asked) }.value
+        }
+    }
+
+    /// Remembers a time picked on a watch's Remote to turn off at, which sends it as minutes, for the next time the air
+    /// is turned on.
+    func rememberEnd(minute: Int) {
+        guard (0..<1440).contains(minute) else { return }
+        pickedEndMinute = minute
+    }
+
+    /// Minutes from now until `end`, to the nearest minute, as far as `limit` allows.
+    private func minutes(until end: Date, limit: Int) -> Int {
+        min(max(Int((end.timeIntervalSinceNow / 60).rounded()), 1), limit)
+    }
+
+    /// Whether changing the temperature or fan should keep the timer to its end. Asked before the change is sent, since
+    /// in Heat a hotter setting can cut the BedJet's timer by itself. A timer set from another phone or the BedJet's own
+    /// remote since Lull last set it is theirs, and Lull stops keeping to it from then on.
     ///
     /// While a change is sent, `timerEnds` is cleared: the BedJet may cut its own timer for it, so the end is read
     /// back afterwards. If a newer slider move replaced that change first, or two changes overlapped, the timer is
     /// still Lull's, and the next change reads it back.
     private func keepsTimer() -> Bool {
-        guard longestEnds != nil else { return false }
+        guard remoteTimer != .picked else { return false }
         guard let timerEnds else {
             // A change cleared it long ago and never read it back, so where the timer is now isn't known.
             guard Date().timeIntervalSince(readingTimerBackSince) < 10 else {
@@ -423,33 +486,45 @@ final class BedJet: Identifiable {
         guard let status, status.isRunning, let statusReceivedAt, statusReceivedAt > connectedAt else { return false }
         let unitEnds = statusReceivedAt.addingTimeInterval(TimeInterval(status.remainingSeconds))
         guard abs(unitEnds.timeIntervalSince(timerEnds)) < 60 else {
-            longestEnds = nil
+            remoteTimer = .picked
             return false
         }
         return true
     }
 
-    /// Air started from the Remote runs for as long as the BedJet allows, until a time is picked. Changing the
-    /// temperature or fan keeps to the end the mode's longest run was given: it never adds time, and gives back
-    /// time the BedJet cut short for a hotter setting once the setting allows. Schedules keep their own timing.
-    /// `asked` is when the person made the change, so a time picked after it wins.
+    /// Air started from the Remote runs for as long as the BedJet allows, or until the time picked there, until a
+    /// duration is picked instead. Changing the temperature or fan keeps to the end that gives: it never adds time, and
+    /// gives back time the BedJet cut short for a hotter setting once the setting allows. Schedules keep their own timing.
+    /// Called just after the change is sent. `asked` is when the person made it, so a duration picked after it wins.
     private func extendRuntime(entering mode: Mode? = nil, askedAt asked: Date) async throws {
         // A schedule started from another phone times its own phases; leave its timer alone.
-        guard run == nil, runningElsewhereStep == nil, let link else {
+        guard remoteTimer != .picked, run == nil, runningElsewhereStep == nil, let link else {
             forgetRemoteTimer()
             return
         }
+        let sent = Date()
         // The limit depends on mode, temperature and fan, and the unit keeps the previous timer when
-        // the mode changes, so wait for it to report the new state before reading the limit.
+        // the mode changes, so wait for it to report the new state before reading the limit. Only a report it sent
+        // after the change says what it allows now: one from before would aim at a limit it no longer has.
         try await Task.sleep(nanoseconds: 600_000_000)
         for _ in 0..<20 {
-            if let status, status.isRunning, status.maxRuntimeMinutes > 0, mode == nil || status.mode == mode {
-                // A time picked while this waited wins.
-                guard timePickedAt < asked else { return }
-                let longest = Date().addingTimeInterval(TimeInterval(status.maxRuntimeMinutes * 60))
-                if mode != nil { longestEnds = longest }
-                guard let longestEnds else { return }
-                let minutes = min(max(Int((min(longestEnds, longest).timeIntervalSinceNow / 60).rounded()), 1), status.maxRuntimeMinutes)
+            if let status, let statusReceivedAt, statusReceivedAt > sent, status.isRunning, status.maxRuntimeMinutes > 0,
+               mode == nil || status.mode == mode {
+                // A duration picked while this waited wins. So does a time, which this keeps to as well: it may have
+                // cleared the timer that time read back. One picked in the same millisecond as the change came before it,
+                // as a phone's clock may not tell them apart.
+                guard timePickedAt <= asked || remoteTimer.isAhead else { return }
+                if mode != nil, remoteTimer == .longest {
+                    longestEnds = Date().addingTimeInterval(TimeInterval(status.maxRuntimeMinutes * 60))
+                }
+                let end: Date? = switch remoteTimer {
+                case .longest: longestEnds
+                case .until(let end): end
+                case .picked: nil
+                }
+                guard let end, end > Date() else { return }
+                // Capped at the mode's longest run, so a damaged save can't send a timer the BedJet doesn't allow.
+                let minutes = minutes(until: end, limit: status.maxRuntimeMinutes)
                 var remaining = status.remainingSeconds
                 if abs(remaining - minutes * 60) > 60 {
                     try await link.setRuntime(minutes: minutes)
@@ -470,10 +545,12 @@ final class BedJet: Identifiable {
         readingTimerBackSince = Date()
     }
 
-    /// Stops keeping the Remote's timer to an end, until a mode is next chosen.
+    /// Stops keeping the Remote's timer to an end, until a mode is next chosen or a time picked to turn off at.
     private func forgetRemoteTimer() {
         longestEnds = nil
         timerEnds = nil
+        // A time picked to turn off at outlives this, so a change still reading the timer back mustn't aim at it.
+        readingTimerBackSince = .distantPast
     }
 
     /// A saved end that Lull could have set: still ahead, and no further off than the BedJet's longest run, so a
@@ -719,11 +796,30 @@ final class BedJet: Identifiable {
         return modes
     }
 
-    /// Why a schedule can't run on this BedJet, if it can't.
-    func problem(running schedule: Schedule) -> String? {
+    /// Why a schedule can't run on this BedJet when started at `date`, if it can't.
+    func problem(running schedule: Schedule, at date: Date = Date()) -> String? {
         let modes = unsupportedModes(in: schedule)
-        guard !modes.isEmpty else { return nil }
-        let names = ListFormatter.localizedString(byJoining: modes.map(\.title))
-        return "\(displayName) is a BedJet V2, which can't run \(names). Edit “\(schedule.name)” or pick another schedule for it."
+        if !modes.isEmpty {
+            let names = ListFormatter.localizedString(byJoining: modes.map(\.title))
+            return "\(displayName) is a BedJet V2, which can't run \(names). Edit “\(schedule.name)” or pick another schedule for it."
+        }
+        // Started then, the last phase has to reach the wake time within what BedJet lets it run.
+        return schedule.wakeProblem(startingAt: Format.minuteOfDay(date))
+    }
+}
+
+/// How air started from the Remote is timed.
+enum RemoteTimer: Codable, Equatable {
+    /// As long as the BedJet allows, which depends on the mode, temperature and fan.
+    case longest
+    /// For a duration picked on the Remote, or one set on another phone or the BedJet's own remote: it counts down as it is.
+    case picked
+    /// Until a time picked on the Remote, as far as the mode allows.
+    case until(Date)
+
+    /// A time picked on the Remote that hasn't come yet.
+    var isAhead: Bool {
+        if case .until(let end) = self { return end > Date() }
+        return false
     }
 }
