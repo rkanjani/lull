@@ -146,7 +146,7 @@ struct TonightView: View {
                     .frame(height: 40)
                     .padding(.horizontal, -8)
                 Spacer(minLength: 6)
-                Text(Format.duration(schedule.totalMinutes))
+                Text(schedule.length)
                     .font(.system(size: 13, weight: .semibold))
                     .monospacedDigit()
                 Text("Tap to start")
@@ -183,7 +183,8 @@ struct TonightView: View {
                     .monospacedDigit()
                     .accessibilityHidden(true)
                 if family == .systemLarge {
-                    phaseList(schedule, startedAt: now, current: nil)
+                    // Started now: with a wake time, the last phase runs until it from now.
+                    phaseList(schedule.resolved(startingAt: Format.minuteOfDay(now)), startedAt: now, current: nil)
                     Spacer(minLength: 0)
                 }
             }

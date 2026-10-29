@@ -80,7 +80,8 @@ class WatchErrandTest {
             prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE),
             linkPrefs = context.getSharedPreferences("$prefsName.link", Context.MODE_PRIVATE),
         )
-        return AppModel(context, LaunchOptions(), storage, demoMode = false, makesLink = { unit(it.unit!!) },
+        // A starter schedule's wake time can be more than 16 hours away, which would make starting a night depend on the time of day.
+        return AppModel(context, LaunchOptions(noWakeTimes = true), storage, demoMode = false, makesLink = { unit(it.unit!!) },
             discovery = { DemoDiscovery(listOf(mine, partners)) }, onScreen = onScreen).also { launched += it }
     }
 
@@ -103,10 +104,14 @@ class WatchErrandTest {
         return bedJet
     }
 
+    /** The built-in schedules as these tests' launches start with them, without wake times (`noWakeTimes`). */
+    private val startingSchedules = Schedule.templates.map { it.copy(wakeTime = null) }
+
     /** Lull as an earlier launch left it, with just [saved] chosen. */
     private fun save(saved: SavedBedJet) {
         val json = buildJsonObject {
-            put("schedules", AppModel.json.encodeToJsonElement(ListSerializer(Schedule.serializer()), Schedule.templates))
+            // The schedules Lull starts with here, without wake times, so the nights these tests start don't depend on the hour.
+            put("schedules", AppModel.json.encodeToJsonElement(ListSerializer(Schedule.serializer()), startingSchedules))
             put("fleet", buildJsonObject {
                 put("bedJets", buildJsonArray { add(AppModel.json.encodeToJsonElement(SavedBedJet.serializer(), saved)) })
                 put("selected", saved.id)
@@ -129,6 +134,27 @@ class WatchErrandTest {
         // Let go again, so another phone can take the BedJet over.
         assertTrue(unit(mine.id).stops > stops)
         assertFalse(bedJet.isConnected)
+    }
+
+    @Test
+    fun aNightWithAWakeTimeEndsAtIt() = onMain {
+        val model = launch()
+        val bedJet = chosen(mine, model)
+        // Two hours of cooling, ending three hours from now whatever the usual bedtime is: each hour stretches to an hour and a half.
+        val wake = (Format.minuteOfDay(System.currentTimeMillis()) + 180) % 1440
+        val schedule = Schedule("Wake", listOf(Phase(Mode.COOL, minutes = 60), Phase(Mode.COOL, fanPercent = 20, minutes = 60)), wakeTime = wake)
+        model.save(schedule)
+        bedJet.tonightID = schedule.id
+
+        val reply = model.runErrand(WatchCommand.StartNight(bedJet.id))
+        assertEquals(WatchReply.done, reply)
+        val run = bedJet.run!!
+        assertEquals(run.schedule.minutesToWake(startingAt = Format.minuteOfDay(run.startedAt)), run.schedule.totalMinutes)
+        assertTrue("three hours from the start, a minute either way", run.schedule.totalMinutes in 179..180)
+        // The BedJet is given tonight's lengths, and keeps to the wake time itself.
+        val stored = bedJet.deviceSlots[bedJet.slot!!]?.steps
+        assertEquals(run.schedule.phases.first().step, stored?.first())
+        assertEquals(schedule.phases.last().step(endingAt = wake), stored?.last())
     }
 
     @Test
@@ -351,7 +377,7 @@ class WatchErrandTest {
     @Test
     fun whatARefreshFindsWentWrongWaitsForLullToBeOpened() = onMain {
         // Started from this phone an hour ago, and ended early by the BedJet since.
-        val night = ActiveRun(Schedule.templates[0], startedAt = System.currentTimeMillis() - 3_600_000)
+        val night = ActiveRun(startingSchedules[0], startedAt = System.currentTimeMillis() - 3_600_000)
         save(SavedBedJet(unit = mine.id, name = mine.name, generation = Generation.V3, run = night))
         val model = launch(onScreen = false)
         val bedJet = model.bedJet!!
@@ -368,7 +394,7 @@ class WatchErrandTest {
     @Test
     fun whatAnErrandFindsBeforeItsOwnCommandIsntHowItWent() = onMain {
         // Started from this phone an hour ago, and ended early by the BedJet since.
-        val night = ActiveRun(Schedule.templates[0], startedAt = System.currentTimeMillis() - 3_600_000)
+        val night = ActiveRun(startingSchedules[0], startedAt = System.currentTimeMillis() - 3_600_000)
         save(SavedBedJet(unit = mine.id, name = mine.name, generation = Generation.V3, run = night))
         val model = launch(onScreen = false)
         val bedJet = model.bedJet!!

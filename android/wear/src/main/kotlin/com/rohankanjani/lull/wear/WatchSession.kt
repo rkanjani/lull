@@ -10,6 +10,7 @@ import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
 import com.rohankanjani.lull.ActiveRun
+import com.rohankanjani.lull.Format
 import com.rohankanjani.lull.LiveStatus
 import com.rohankanjani.lull.Phase
 import com.rohankanjani.lull.RemoteSetting
@@ -180,7 +181,9 @@ class DemoPhone(snapshot: WidgetSnapshot, private val scope: CoroutineScope) : P
                     // A night already under way is left running, as on the phone.
                     val tonight = bedJet.tonight
                     if (bedJet.live(now) !is LiveStatus.Night && tonight != null) {
-                        bedJet = bedJet.copy(live = LiveStatus.Night(ActiveRun(tonight, now - elapsedMinutes * 60_000L)))
+                        val startedAt = now - elapsedMinutes * 60_000L
+                        // As the phone starts it: with a wake time, scaled to end at it.
+                        bedJet = bedJet.copy(live = LiveStatus.Night(ActiveRun(tonight.resolved(startingAt = Format.minuteOfDay(startedAt)), startedAt)))
                     }
                 }
                 is WatchCommand.EndNight -> bedJet = bedJet.copy(live = null)

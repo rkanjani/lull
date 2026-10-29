@@ -69,8 +69,9 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Watch pages: Tonight, Remote, Last Night, picking a BedJet | `LullWatch/Views/` | `android/wear/.../ui/` |
 | Tonight on the watch face | `LullWatchWidgets/TonightComplication.swift` | `android/wear/.../TonightComplication.kt`, `TonightTile.kt` |
 | Protocol tests | `BedJetKit/Tests/BedJetKitTests/CodecTests.swift`, `CodecV2Tests.swift`, `DiscoveryTests.swift` | `android/bedjetkit/src/test/.../CodecTest.kt`, `CodecV2Test.kt`, `DiscoveryTest.kt` |
-| App logic tests | | `android/app/src/test/.../ScheduleTest.kt` |
+| App logic tests, including wake times | `LullTests/ScheduleTests.swift` | `android/app/src/test/.../ScheduleTest.kt` |
 | Choosing, switching and forgetting BedJets | `LullTests/DeviceSelectionTests.swift` | `android/app/src/androidTest/.../DeviceSelectionTest.kt` (on a device, since the model needs Android) |
+| How the Remote times air: longest, a duration or a time | `LullTests/RemoteTimerTests.swift` | `android/app/src/androidTest/.../RemoteTimerTest.kt` (on a device, since the model needs Android) |
 | Widget tests | `LullTests/WidgetTests.swift` | `android/app/src/test/.../WidgetTest.kt` |
 | Live Activity and Live Update tests | `LullTests/LiveStatusTests.swift`, `LiveActivitiesTests.swift`, `LullUITests/LiveActivityTests.swift` | `android/app/src/test/.../LiveStatusTest.kt`, `android/app/src/androidTest/.../LiveNotificationsTest.kt`, `LiveUpdateTest.kt` |
 | Widget UI tests | `LullUITests/HomeScreenWidgetTests.swift` | `android/app/src/androidTest/.../WidgetUiTest.kt`, `BedJetPickerTest.kt` and `QuickRemotePickerTest.kt` (the widgets' editors, which are system UI on iOS) |
@@ -85,8 +86,11 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Release | `fastlane ios release`, `.github/workflows/app-store.yml` | `fastlane android release`, `.github/workflows/play-store.yml` |
 
 Launch flags match too: `-ephemeral`, `-demoElapsedMinutes`, `-demoLabelConnected`, `-demoHistory`,
-`-demoChoose`, `-demoFirstUnitAway` and `-logConnections` on iOS are the intent extras of the same names on
-Android. The watch apps take `-demo` (a pretend phone with the sample BedJets), `-demoHistory`,
+`-demoChoose`, `-demoFirstUnitAway`, `-noWakeTimes` and `-logConnections` on iOS are the intent extras of the same
+names on Android. `-noWakeTimes` starts from the starter schedules without their wake times, since one more than 16 hours
+away can't be reached: tests that start a night use it so they don't pass or fail by the time of day. The Lull scheme passes it and
+`-ephemeral` to the app the unit tests run in, so the VoiceOver tests start from the starter schedules each run and
+leave the simulator's own copy of Lull alone. The watch apps take `-demo` (a pretend phone with the sample BedJets), `-demoHistory`,
 `-demoElapsedMinutes` and `-ephemeral`, the Wear OS app as intent extras.
 
 The watch never reaches the BedJet itself. Lull on the phone runs each errand the watch asks for: it connects,
@@ -147,6 +151,10 @@ Platform conventions, not behaviour:
   unlike the App Store lane it doesn't replace a release that is still in review.
 - iOS plays the night timeline as a VoiceOver audio graph (`accessibilityChartDescriptor`). Android has no
   equivalent, so TalkBack reads the same phases from the timeline's description instead.
+- The schedule editor's bedtime and wake-time pickers, and the Remote's "Turns off at", are iOS's compact time
+  pickers, which VoiceOver calls only "Time Picker" whatever they're labelled, so it reads the row's label ("Usual
+  bedtime", "Wake time", "Turns off at") just before each. Android's are buttons that read "Usual bedtime, 10:30 PM",
+  "Wake time, 6:30 AM" and "Turns off at, 6:30 AM" in one, and open Material's time picker.
 - An iPhone advertises one set of services at a time, so iOS sends every BedJet's hand-over request in one
   advertisement (`HandoffRequests`). Android runs one advertisement per BedJet side by side.
 - Android phones have no Lock Screen or StandBy widgets, so the Tonight and Last Night widgets are Home

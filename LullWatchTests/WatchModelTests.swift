@@ -59,6 +59,12 @@ final class WatchModelTests: XCTestCase {
         XCTAssertNil(model.errorMessage)
     }
 
+    func testTheRemoteRemembersShowingATime() {
+        XCTAssertFalse(launch().remoteShowsTime, "a duration, by default")
+        launch().remoteShowsTime = true
+        XCTAssertTrue(launch().remoteShowsTime, "remembered on the watch")
+    }
+
     func testAnErrandStaysBusyWhileItsSettingsChange() async {
         let model = launch()
         let cool = RemotePreset(mode: .cool, minutes: 30, temperature: 44, fanPercent: 40)

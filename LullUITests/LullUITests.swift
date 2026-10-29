@@ -6,7 +6,7 @@ final class LullUITests: XCTestCase {
 
     override func setUp() {
         continueAfterFailure = false
-        app.launchArguments = ["-ephemeral"]
+        app.launchArguments = ["-ephemeral", "-noWakeTimes"]
         app.launch()
     }
 
@@ -85,6 +85,81 @@ final class LullUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Use Warm Welcome tonight"].waitForExistence(timeout: 5))
     }
 
+    func testAWakeTimeScalesTheNight() {
+        // The starter schedules as they come, with their wake times.
+        app.terminate()
+        app.launchArguments = ["-ephemeral"]
+        app.launch()
+        app.tabBars.buttons["Schedule"].tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Warm Welcome'")).firstMatch.tap()
+        XCTAssertTrue(app.buttons["Add Phase"].waitForExistence(timeout: 5))
+
+        // Warm Welcome wakes where its night ends from the usual bedtime, so the editor shows both times and each phase's start
+        // on a usual night.
+        let wakeTime = app.buttons["Wake time"]
+        XCTAssertTrue(wakeTime.waitForExistence(timeout: 5))
+        XCTAssertTrue(wakeTime.isSelected)
+        XCTAssertTrue(app.staticTexts["Usual bedtime"].exists)
+        XCTAssertTrue(app.staticTexts["Wake time"].exists)
+        let timeline = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Night timeline, '")).firstMatch
+        XCTAssertTrue(timeline.waitForExistence(timeout: 5))
+        let night = timeline.label
+        let last = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Phase 4,'")).firstMatch
+        XCTAssertTrue(last.label.contains("40 minutes, fixed length, starts "), last.label)
+        capture("wake-time-editor")
+
+        // Its cool is the only phase that stretches or shrinks, so it's as long as the rest leave, with no slider.
+        let cool = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Phase 3,'")).firstMatch
+        XCTAssertTrue(cool.label.contains("6 hours, starts "), cool.label)
+        cool.tap()
+        XCTAssertTrue(app.buttons["Remove Phase"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.sliders["Duration"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Fills the rest of the night'")).firstMatch.exists)
+        sleep(1)
+        capture("wake-time-fills")
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.buttons["Remove Phase"].waitForNonExistence(timeout: 5))
+
+        // On Bedtime the night runs from the usual bedtime for the phases' set lengths, with no wake time.
+        app.buttons["Bedtime"].tap()
+        XCTAssertTrue(app.staticTexts["Wake time"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Usual bedtime"].exists)
+        capture("wake-time-off")
+        // A shorter first phase ends the night sooner, until choosing Wake time again brings back the one it had: the cool
+        // takes up the 5 minutes.
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Phase 1,'")).firstMatch.tap()
+        let duration = app.sliders["Duration"]
+        XCTAssertTrue(duration.waitForExistence(timeout: 5))
+        slide(duration, from: 0.97, to: 0)
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.buttons["Remove Phase"].waitForNonExistence(timeout: 5))
+        XCTAssertNotEqual(timeline.label, night)
+        wakeTime.tap()
+        XCTAssertTrue(app.staticTexts["Wake time"].waitForExistence(timeout: 5))
+        XCTAssertEqual(timeline.label, night, "the wake time it had, not where the shorter night would end")
+        XCTAssertTrue(cool.label.contains("6 hours, 5 minutes, starts "), cool.label)
+
+        // The starter's closing warm-up keeps its length while the rest of the night stretches or shrinks.
+        last.tap()
+        XCTAssertTrue(app.buttons["Remove Phase"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.sliders["Duration"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Stays 40 min while the rest of the night stretches or shrinks to end at '")).firstMatch.exists)
+        sleep(1)
+        capture("wake-time-phase")
+        // Not fixed, it stretches or shrinks with the rest.
+        app.switches["Fixed length"].coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Stretches or shrinks with the rest of the night to end at '")).firstMatch
+            .waitForExistence(timeout: 5))
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Phase 4,' AND NOT (label CONTAINS 'fixed length')")).firstMatch
+            .waitForExistence(timeout: 5))
+
+        // Saved, it's listed by when it ends.
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Warm Welcome, until '")).firstMatch.waitForExistence(timeout: 5))
+        capture("wake-time-schedule")
+    }
+
     func testHistoryKeepsTheNight() {
         app.tabBars.buttons["History"].tap()
         XCTAssertTrue(app.staticTexts["No nights yet"].waitForExistence(timeout: 10))
@@ -94,6 +169,7 @@ final class LullUITests: XCTestCase {
         XCTAssertTrue(heat.waitForExistence(timeout: 10))
         sleep(2)
         heat.tap()
+        showTimer()
         XCTAssertTrue(app.sliders["Turns off in"].waitForExistence(timeout: 5))
         // A setting is recorded once the BedJet has held it for a few seconds.
         sleep(4)
@@ -135,7 +211,7 @@ final class LullUITests: XCTestCase {
 
     func testHistoryListsNightsAsRows() {
         app.terminate()
-        app.launchArguments = ["-ephemeral", "-demoHistory"]
+        app.launchArguments = ["-ephemeral", "-noWakeTimes", "-demoHistory"]
         app.launch()
         app.tabBars.buttons["History"].tap()
 
@@ -163,9 +239,15 @@ final class LullUITests: XCTestCase {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "\(title),")).firstMatch
     }
 
+    /// The Remote's timer as a duration, the default, whatever an earlier run left chosen: the choice is kept even with `-ephemeral`.
+    private func showTimer() {
+        let timerOption = app.buttons["Timer"]
+        if timerOption.waitForExistence(timeout: 5), !timerOption.isSelected { timerOption.tap() }
+    }
+
     private func relaunch(_ arguments: [String]) {
         app.terminate()
-        app.launchArguments = ["-ephemeral"] + arguments
+        app.launchArguments = ["-ephemeral", "-noWakeTimes"] + arguments
         app.launch()
     }
 
@@ -198,6 +280,7 @@ final class LullUITests: XCTestCase {
         XCTAssertTrue(second.waitForExistence(timeout: 5))
         sleep(2)
         heat.tap()
+        showTimer()
         let timer = app.sliders["Turns off in"]
         XCTAssertTrue(timer.waitForExistence(timeout: 5))
 
@@ -282,6 +365,7 @@ final class LullUITests: XCTestCase {
         XCTAssertTrue(heat.waitForExistence(timeout: 10))
         sleep(2)
         heat.tap()
+        showTimer()
         // Turning a mode on asks for the longest run the simulated BedJet allows: 4 hours of heat.
         let timer = app.sliders["Turns off in"]
         XCTAssertTrue(timer.waitForExistence(timeout: 5))
@@ -305,6 +389,20 @@ final class LullUITests: XCTestCase {
         expectation(for: NSPredicate(format: "value == '4 hours'"), evaluatedWith: timer)
         waitForExpectations(timeout: 5)
         capture("remote-heat")
+
+        // Shown as a time, it's when the countdown runs out, and the choice is remembered.
+        app.buttons["Time"].tap()
+        XCTAssertTrue(app.datePickers.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Turns off at"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'In 3 hr' OR label BEGINSWITH 'In 4 hr'")).firstMatch.exists)
+        XCTAssertFalse(timer.exists)
+        capture("remote-time")
+        relaunch([])
+        app.buttons["Heat"].tap()
+        XCTAssertTrue(app.datePickers.firstMatch.waitForExistence(timeout: 10), "still shown as a time after relaunching")
+        // Back to the default, which later tests and launches expect.
+        app.buttons["Timer"].tap()
+        XCTAssertTrue(app.sliders["Turns off in"].waitForExistence(timeout: 5))
         app.buttons["Off"].tap()
 
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'BedJet'")).firstMatch.tap()

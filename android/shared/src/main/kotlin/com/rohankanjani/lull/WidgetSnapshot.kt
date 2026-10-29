@@ -209,9 +209,20 @@ data class WidgetBedJet(
     fun live(now: Long): LiveStatus? = live?.takeIf { it.endsAt > now }
 }
 
-/** "7 hr 45 min · 4 phases" */
+/** How long the night runs, "7 hr 45 min", or "Until 6:30 AM" with a wake time, since then that depends on when it starts. */
+val Schedule.length: String
+    get() = wakeTime?.let { "Until ${Format.clock(it)}" } ?: Format.duration(totalMinutes)
+
+val Schedule.spokenLength: String
+    get() = wakeTime?.let { "until ${Format.clock(it)}" } ?: Format.spokenDuration(totalMinutes)
+
+/** Short enough for a small widget or complication: "7h 45m", or the wake time. */
+val Schedule.shortLength: String
+    get() = wakeTime?.let { Format.clock(it) } ?: Format.shortDuration(totalMinutes)
+
+/** "7 hr 45 min · 4 phases", or "Until 6:30 AM · 4 phases" */
 val Schedule.summary: String
-    get() = "${Format.duration(totalMinutes)} · ${phases.size} ${if (phases.size == 1) "phase" else "phases"}"
+    get() = "$length · ${phases.size} ${if (phases.size == 1) "phase" else "phases"}"
 
 val Schedule.spokenSummary: String
-    get() = "${Format.spokenDuration(totalMinutes)}, ${phases.size} ${if (phases.size == 1) "phase" else "phases"}"
+    get() = "$spokenLength, ${phases.size} ${if (phases.size == 1) "phase" else "phases"}"

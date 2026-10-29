@@ -174,7 +174,9 @@ final class DemoPhone: Phone {
                 // A night already under way is left running, as on the iPhone.
                 let isRunning = if case .night? = bedJet.live(at: now) { true } else { false }
                 if !isRunning, let tonight = bedJet.tonight {
-                    bedJet.live = .night(ActiveRun(schedule: tonight, startedAt: now.addingTimeInterval(TimeInterval(-elapsedMinutes * 60))))
+                    let startedAt = now.addingTimeInterval(TimeInterval(-elapsedMinutes * 60))
+                    // As the phone starts it: with a wake time, scaled to end at it.
+                    bedJet.live = .night(ActiveRun(schedule: tonight.resolved(startingAt: Format.minuteOfDay(startedAt)), startedAt: startedAt))
                 }
             case .endNight:
                 bedJet.live = nil

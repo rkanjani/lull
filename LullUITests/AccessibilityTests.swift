@@ -13,7 +13,7 @@ final class AccessibilityTests: XCTestCase {
     }
 
     private func launch(textSize: String? = nil) {
-        app.launchArguments = ["-ephemeral", "-demoHistory"]
+        app.launchArguments = ["-ephemeral", "-noWakeTimes", "-demoHistory"]
         if let textSize {
             self.textSize = textSize
             isLarge = true
@@ -73,8 +73,15 @@ final class AccessibilityTests: XCTestCase {
     /// Scrolls until the element can be tapped, down first and then back up.
     @discardableResult
     private func reveal(_ element: XCUIElement) -> XCUIElement {
-        for _ in 0..<5 where !(element.exists && element.isHittable) { app.swipeUp() }
-        for _ in 0..<10 where !(element.exists && element.isHittable) { app.swipeDown() }
+        func tappable() -> Bool {
+            guard element.exists && element.isHittable else { return false }
+            // In the editor, a row just under the bottom bar still counts as hittable, but a tap there lands on the bar.
+            let bar = app.buttons["Use Tonight"]
+            guard element.label != "Use Tonight", bar.exists, bar.isHittable else { return true }
+            return element.frame.maxY < bar.frame.minY - 12
+        }
+        for _ in 0..<5 where !tappable() { app.swipeUp() }
+        for _ in 0..<10 where !tappable() { app.swipeDown() }
         sleep(1)
         return element
     }
@@ -100,12 +107,21 @@ final class AccessibilityTests: XCTestCase {
         try audit("remote-off")
 
         reveal(heat).tap()
+        // A duration, the default, whatever an earlier run left chosen: the choice is kept even with `-ephemeral`.
+        let timerOption = app.buttons["Timer"]
+        if timerOption.waitForExistence(timeout: 5), !timerOption.isSelected { reveal(timerOption).tap() }
         let timer = app.sliders["Turns off in"]
         XCTAssertTrue(timer.waitForExistence(timeout: 5))
         expectation(for: NSPredicate(format: "value == '4 hours'"), evaluatedWith: timer)
         waitForExpectations(timeout: 5)
         XCTAssertTrue(element("label BEGINSWITH 'Heating, set to'").exists)
         try audit("remote-heat")
+        // Shown as a time, then back to the default for the rest of the walk and later launches.
+        reveal(app.buttons["Time"]).tap()
+        XCTAssertTrue(app.staticTexts["Turns off at"].waitForExistence(timeout: 5))
+        try audit("remote-time")
+        reveal(app.buttons["Timer"]).tap()
+        XCTAssertTrue(app.sliders["Turns off in"].waitForExistence(timeout: 5))
         reveal(app.buttons["Off"]).tap()
 
         reveal(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'BedJet,'")).firstMatch).tap()
@@ -144,6 +160,22 @@ final class AccessibilityTests: XCTestCase {
         XCTAssertTrue(app.buttons["Remove Phase"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.sliders["Duration"].value as? String, "30 minutes")
         try audit("phase-editor", overSheet: true)
+        reveal(app.buttons["Done"]).tap()
+        // With a wake time the editor shows it under the usual bedtime, and each phase's sheet has a Fixed length switch.
+        let wakeTime = app.buttons["Wake time"]
+        reveal(wakeTime).tap()
+        expectation(for: NSPredicate(format: "isSelected == true"), evaluatedWith: wakeTime)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(app.staticTexts["Wake time"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Usual bedtime"].exists)
+        // Back to the top, so the Night card is audited whole rather than with its switch half under the bar.
+        app.swipeDown()
+        try audit("editor-wake-time")
+        let last = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Phase 4,' AND label CONTAINS 'fixed length'")).firstMatch
+        XCTAssertTrue(reveal(last).exists)
+        last.tap()
+        XCTAssertTrue(reveal(app.switches["Fixed length"]).exists)
+        try audit("phase-editor-wake-time", overSheet: true)
         reveal(app.buttons["Done"]).tap()
         reveal(app.buttons["Cancel"]).tap()
 

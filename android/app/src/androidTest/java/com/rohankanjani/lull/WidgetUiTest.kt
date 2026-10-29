@@ -200,7 +200,10 @@ class WidgetUiTest {
 
     @Test
     fun startNightFromATileOrShortcut() {
-        val open = Intent(ApplicationProvider.getApplicationContext(), MainActivity::class.java).putExtra("ephemeral", true)
+        // Without wake times, as launchLull starts, so the night starts whatever the time of day.
+        val open = Intent(ApplicationProvider.getApplicationContext(), MainActivity::class.java)
+            .putExtra("ephemeral", true)
+            .putExtra("noWakeTimes", true)
         ActivityScenario.launch<MainActivity>(open).use { scenario ->
             // The button goes through Lull's own screen for commands, which hands it to Lull.
             scenario.onActivity { it.startActivity(AppCommands.startNightIntent(it)) }

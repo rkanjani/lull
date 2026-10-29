@@ -30,6 +30,7 @@ class WatchModelTest {
     private class MemoryStore : WatchStore {
         override var picked: String? = null
         override var askedAt: Long? = null
+        override var remoteShowsTime = false
         override fun load(): WidgetSnapshot? = null
         override fun save(snapshot: WidgetSnapshot) {}
     }
@@ -73,6 +74,13 @@ class WatchModelTest {
         assertNull(model.pending)
         assertNull(model.shown.run(System.currentTimeMillis()))
         assertNull(model.errorMessage)
+    }
+
+    @Test
+    fun theRemoteRemembersShowingATime() = runTest {
+        assertFalse("a duration, by default", launch(phone()).remoteShowsTime)
+        launch(phone()).remoteShowsTime = true
+        assertTrue("remembered on the watch", launch(phone()).remoteShowsTime)
     }
 
     @Test

@@ -47,6 +47,11 @@ final class AppModel {
             publishLiveActivities()
         }
     }
+    /// Whether the Remote shows when air turns off as a time of day rather than a duration. It only changes what's shown:
+    /// the BedJet counts down either way.
+    var remoteTimerShowsTime: Bool {
+        didSet { storage.defaults.set(remoteTimerShowsTime, forKey: "remoteTimerShowsTime") }
+    }
     var demoMode: Bool {
         didSet {
             storage.defaults.set(demoMode, forKey: "demoMode")
@@ -98,6 +103,7 @@ final class AppModel {
         makesDiscovery = discovery ?? { demo in demo ? DemoDiscovery() as BedJetDiscovery : BLEDiscovery() }
         let defaults = storage.defaults
         useFahrenheit = defaults.object(forKey: "useFahrenheit") as? Bool ?? (Locale.current.measurementSystem == .us)
+        remoteTimerShowsTime = defaults.bool(forKey: "remoteTimerShowsTime")
         #if targetEnvironment(simulator)
         self.demoMode = demoMode ?? true
         #else
@@ -362,7 +368,7 @@ final class AppModel {
         if let makesLink { return makesLink(bedJet) }
         guard bedJet.isDemo else { return BLELink(unit: bedJet.unit) }
         let demo = DemoLink(name: bedJet.name ?? DemoLink.defaultName,
-                            slots: [StoredProgram(name: "Summer nights", steps: Schedule.templates[2].program.steps), nil, nil])
+                            slots: [StoredProgram(name: "Summer nights", steps: Self.startingSchedules[2].program.steps), nil, nil])
         demo.answers = !(Self.demoFirstUnitAway && bedJet.unit == DemoDiscovery.simulated[0].id)
         return demo
     }
@@ -433,7 +439,7 @@ final class AppModel {
     /// Keeps a copy of a program made elsewhere, so reusing its slot never loses it.
     func keepCopy(of program: StoredProgram) {
         let imported = Schedule(importing: program)
-        if !schedules.contains(where: { $0.phases.map(\.step) == imported.phases.map(\.step) }) {
+        if !schedules.contains(where: { $0.matches(imported: imported) }) {
             schedules.append(imported)
         }
     }
@@ -498,10 +504,20 @@ final class AppModel {
     static let demoStartsUnchosen = ProcessInfo.processInfo.arguments.contains("-demoChoose")
     /// Launching with `-demoFirstUnitAway` makes the first simulated BedJet never answer, as if it were unplugged.
     static let demoFirstUnitAway = ProcessInfo.processInfo.arguments.contains("-demoFirstUnitAway")
+    /// Launching with `-noWakeTimes` starts from the built-in schedules without their wake times. A wake time more than
+    /// 16 hours away can't be reached, so a test that starts a night would otherwise pass or fail by the time of day.
+    /// Model tests set it themselves.
+    static var startsWithoutWakeTimes = ProcessInfo.processInfo.arguments.contains("-noWakeTimes")
+
+    /// The schedules Lull starts with when it has none saved.
+    static var startingSchedules: [Schedule] {
+        guard startsWithoutWakeTimes else { return Schedule.templates }
+        return Schedule.templates.map { var schedule = $0; schedule.wakeTime = nil; return schedule }
+    }
 
     private func load() {
         let saved = storage.file("lull.json").flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(Saved.self, from: $0) }
-        schedules = saved?.schedules ?? Schedule.templates
+        schedules = saved?.schedules ?? Self.startingSchedules
         otherFleet = (demoMode ? saved?.fleet : saved?.demoFleet).map { checked($0, demo: !demoMode) }
         if let fleet = demoMode ? saved?.demoFleet : saved?.fleet {
             show(checked(fleet, demo: demoMode))

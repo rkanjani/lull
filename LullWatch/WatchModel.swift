@@ -19,6 +19,10 @@ final class WatchModel {
             save()
         }
     }
+    /// Whether the Remote page shows when air turns off as a time of day rather than a duration.
+    var remoteShowsTime: Bool {
+        didSet { defaults.set(remoteShowsTime, forKey: Self.showsTimeKey) }
+    }
     private(set) var isReachable = false
     /// The errand on its way, until the iPhone says how it went.
     private(set) var pending: WatchCommand?
@@ -39,6 +43,7 @@ final class WatchModel {
     static var findingPhone: TimeInterval = 5
     private static let pickedKey = "bedJet"
     private static let askedKey = "askedAt"
+    private static let showsTimeKey = "remoteShowsTime"
 
     /// - Parameter saves: Off for tests and `-ephemeral`, which keep nothing between launches.
     init(phone: Phone, defaults: UserDefaults = .standard, saves: Bool = true) {
@@ -48,6 +53,7 @@ final class WatchModel {
         snapshot = (saves ? WidgetSnapshot.load() : nil) ?? WidgetSnapshot()
         pickedID = defaults.string(forKey: Self.pickedKey).flatMap(UUID.init)
         askedAt = defaults.object(forKey: Self.askedKey) as? Date
+        remoteShowsTime = defaults.bool(forKey: Self.showsTimeKey)
         phone.onSnapshot = { [weak self] in self?.receive($0) }
         phone.onReply = { [weak self] in self?.receive($0) }
         phone.onReachabilityChange = { [weak self] in self?.reachabilityChanged() }

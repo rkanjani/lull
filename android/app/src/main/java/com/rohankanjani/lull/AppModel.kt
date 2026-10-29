@@ -45,6 +45,11 @@ data class LaunchOptions(
     val demoStartsUnchosen: Boolean = false,
     /** Makes the first simulated BedJet never answer, as if it were unplugged. */
     val demoFirstUnitAway: Boolean = false,
+    /**
+     * Starts from the built-in schedules without their wake times. A wake time more than 16 hours away can't be reached,
+     * so a test that starts a night would otherwise pass or fail by the time of day.
+     */
+    val noWakeTimes: Boolean = false,
 )
 
 /** Where Lull keeps what it saves. UI tests (`ephemeral`) and model tests keep nothing in the app's own place. */
@@ -119,6 +124,19 @@ class AppModel(
             prefs.edit().putBoolean("useFahrenheit", value).apply()
             publishWidgets()
             publishLiveNotifications()
+        }
+
+    private var showsTime by mutableStateOf(prefs.getBoolean("remoteTimerShowsTime", false))
+
+    /**
+     * Whether the Remote shows when air turns off as a time of day rather than a duration. It only changes what's shown:
+     * the BedJet counts down either way.
+     */
+    var remoteTimerShowsTime: Boolean
+        get() = showsTime
+        set(value) {
+            showsTime = value
+            prefs.edit().putBoolean("remoteTimerShowsTime", value).apply()
         }
 
     private var demo by mutableStateOf(demoMode ?: (isEmulator() || prefs.getBoolean("demoMode", false)))
@@ -445,7 +463,7 @@ class AppModel(
         if (!bedJet.isDemo) return BleLink(application, bedJet.unit)
         return DemoLink(
             name = bedJet.name ?: DemoLink.DEFAULT_NAME,
-            slots = listOf(StoredProgram("Summer nights", Schedule.templates[2].program.steps), null, null),
+            slots = listOf(StoredProgram("Summer nights", startingSchedules[2].program.steps), null, null),
             scope = scope,
         ).apply { answers = !(options.demoFirstUnitAway && bedJet.unit == DemoDiscovery.SIMULATED[0].id) }
     }
@@ -517,9 +535,7 @@ class AppModel(
     /** Keeps a copy of a program made elsewhere, so reusing its slot never loses it. */
     fun keepCopy(program: StoredProgram) {
         val imported = Schedule.importing(program)
-        if (schedules.none { existing -> existing.phases.map { it.step } == imported.phases.map { it.step } }) {
-            schedules = schedules + imported
-        }
+        if (schedules.none { it.matches(imported = imported) }) schedules = schedules + imported
     }
 
     fun save(schedule: Schedule) {
@@ -567,9 +583,13 @@ class AppModel(
 
     private val fleet: Fleet get() = Fleet(bedJets.map { it.saved }, selectedID, retired, needsChoice)
 
+    /** The schedules Lull starts with when it has none saved. */
+    private val startingSchedules: List<Schedule>
+        get() = if (options.noWakeTimes) Schedule.templates.map { it.copy(wakeTime = null) } else Schedule.templates
+
     private fun load() {
         val saved = storage.file("lull.json")?.let { file -> runCatching { json.decodeFromString<Saved>(file.readText()) }.getOrNull() }
-        savedSchedules = saved?.schedules ?: Schedule.templates
+        savedSchedules = saved?.schedules ?: startingSchedules
         otherFleet = (if (demoMode) saved?.fleet else saved?.demoFleet)?.let { checked(it, demo = !demoMode) }
         val fleet = if (demoMode) saved?.demoFleet else saved?.fleet
         show(if (fleet != null) checked(fleet, demo = demoMode) else startingFleet(demoMode, legacy = saved))

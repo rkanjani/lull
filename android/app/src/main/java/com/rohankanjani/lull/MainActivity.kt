@@ -38,6 +38,7 @@ class MainActivity : ComponentActivity() {
             demoHistory = intent.getBooleanExtra("demoHistory", false),
             demoStartsUnchosen = intent.getBooleanExtra("demoChoose", false),
             demoFirstUnitAway = intent.getBooleanExtra("demoFirstUnitAway", false),
+            noWakeTimes = intent.getBooleanExtra("noWakeTimes", false),
         )
     }
 

@@ -59,8 +59,6 @@ import com.rohankanjani.lull.Format
 import com.rohankanjani.lull.HistoryEntry
 import com.rohankanjani.lull.Night
 import com.rohankanjani.lull.title
-import java.time.Instant
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -92,12 +90,7 @@ fun HistoryScreen(model: AppModel) {
     }
 }
 
-private fun minuteOfDay(millis: Long): Int {
-    val time = Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).toLocalTime()
-    return time.hour * 60 + time.minute
-}
-
-private fun time(millis: Long): String = Format.clock(minuteOfDay(millis))
+private fun time(millis: Long): String = Format.clock(Format.minuteOfDay(millis))
 
 /** One night at a glance, opening up to everything that happened in it. */
 @Composable

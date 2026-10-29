@@ -106,7 +106,7 @@ struct TonightAccessory: View {
                 AccessoryWidgetBackground()
                 VStack(spacing: 1) {
                     Image(systemName: "moon.stars.fill").font(.system(size: 15, weight: .semibold))
-                    Text(Format.shortDuration(schedule.totalMinutes))
+                    Text(schedule.shortLength)
                         .font(.system(size: 11, weight: .semibold))
                         .minimumScaleFactor(0.7)
                 }

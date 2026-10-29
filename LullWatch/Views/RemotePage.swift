@@ -16,6 +16,8 @@ struct RemotePage: View {
     @State private var startsAir = false
     /// The BedJet the page last followed, so coming back to the page keeps what was set here for it but not yet sent.
     @State private var followedID: UUID?
+    /// When the air turns off, as a minute of the day, while the page shows it as a time.
+    @State private var endMinute = 0
     @FocusState private var focused: RemoteSetting?
 
     var body: some View {
@@ -49,7 +51,13 @@ struct RemotePage: View {
         .task(id: endsAt) {
             guard let endsAt else { return }
             do { try await Task.sleep(for: .seconds(max(endsAt.timeIntervalSinceNow, 0))) } catch { return }
-            if changed.isEmpty { follow(model.bedJet) } else { startsAir = true }
+            if changed.isEmpty {
+                follow(model.bedJet)
+            } else {
+                startsAir = true
+                // Shown as a time, the end that just passed moves on as far as the timer would run.
+                if model.remoteShowsTime { setEnd(minutes: minutes) }
+            }
         }
         // Kept to what the mode may run at this temperature and fan, as the iPhone's phase editor does.
         .onChange(of: runtimeLimit.range, initial: true) { keepTimeInLimit() }
@@ -72,15 +80,27 @@ struct RemotePage: View {
                 CrownRow(title: "Fan", valueText: "\(fan)%", value: Binding { Double(fan) } set: { change(&fan, to: Int($0), .fan) },
                          range: 5...100, step: 5, tint: mode.tint, focus: $focused, setting: .fan)
             }
+            timerChoice
             let limit = runtimeLimit
-            CrownRow(title: "Turns off in", valueText: Format.duration(minutes), spokenValue: Format.spokenDuration(minutes),
-                     value: Binding { Double(minutes) } set: { change(&minutes, to: Int($0), .time) }, range: limit.range, step: limit.step,
-                     focus: $focused, setting: .time)
+            if model.remoteShowsTime {
+                // The crown moves the end a step at a time: 6:30, 6:45.
+                CrownRow(title: "Turns off at", valueText: Format.clock(endMinute),
+                         value: Binding { Double(Format.minutes(until: endMinute, from: Date())) } set: { pickEnd(minutes: Int($0)) },
+                         range: limit.range, step: limit.step, focus: $focused, setting: .time)
+            } else {
+                CrownRow(title: "Turns off in", valueText: Format.duration(minutes), spokenValue: Format.spokenDuration(minutes),
+                         value: Binding { Double(minutes) } set: { change(&minutes, to: Int($0), .time) }, range: limit.range, step: limit.step,
+                         focus: $focused, setting: .time)
+            }
         }
-        let preset = RemotePreset(mode: mode, minutes: minutes, temperature: temperature, fanPercent: fan).clamped
-        let changes = startsAir ? Set(RemoteSetting.allCases) : changed
-        ErrandButton(title: mode == .standby ? "Turn Off" : "Apply", busyTitle: "Sending…", isEnabled: !changes.isEmpty,
-                     command: .remote(preset, bedJet.id, changed: changes))
+        // Redrawn each minute, so a time is sent as the minutes left until it when Apply is pressed.
+        TimelineView(.everyMinute) { _ in
+            let runs = model.remoteShowsTime && mode != .standby ? Format.minutes(until: endMinute, from: Date()) : minutes
+            let preset = RemotePreset(mode: mode, minutes: runs, temperature: temperature, fanPercent: fan).clamped
+            let changes = startsAir ? Set(RemoteSetting.allCases) : changed
+            ErrandButton(title: mode == .standby ? "Turn Off" : "Apply", busyTitle: "Sending…", isEnabled: !changes.isEmpty,
+                         command: .remote(preset, bedJet.id, changed: changes))
+        }
         if case .night? = bedJet.live(at: Date()) {
             Footnote(text: "Choosing a mode here ends the schedule that's running.")
         }
@@ -104,11 +124,38 @@ struct RemotePage: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
+    /// Timer or Time: whether the row below sets how long the air runs or when it turns off. Remembered on the watch.
+    private var timerChoice: some View {
+        HStack(spacing: 6) {
+            ForEach([false, true], id: \.self) { showsTime in
+                let isSelected = model.remoteShowsTime == showsTime
+                Button {
+                    guard !isSelected else { return }
+                    if showsTime { setEnd(minutes: minutes) } else { minutes = clamped(Format.minutes(until: endMinute, from: Date())) }
+                    model.remoteShowsTime = showsTime
+                } label: {
+                    Text(showsTime ? "Time" : "Timer")
+                        .scaledFont(13, .semibold)
+                        .foregroundStyle(isSelected ? Color.black : Color.white)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .background(isSelected ? Color.white : Theme.raised, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+    }
+
     private func choose(_ option: Mode) {
         guard option != mode else { return }
         mode = option
         temperature = option.defaultTemperature
         changed.formUnion([.mode, .temperature])
+        if model.remoteShowsTime {
+            // Shown as a time, the end on screen holds across modes, as on the iPhone, so it goes with the mode.
+            setEnd(minutes: Format.minutes(until: endMinute, from: Date()))
+            changed.insert(.time)
+        }
         keepTimeInLimit()
     }
 
@@ -122,6 +169,10 @@ struct RemotePage: View {
         } else {
             minutes = min(max((minutes + step / 2) / step * step, Int(limit.range.lowerBound)), Int(limit.range.upperBound))
         }
+        // Shown as a time, an end later than the mode may now run comes in to the latest it may.
+        if model.remoteShowsTime, Format.minutes(until: endMinute, from: Date()) > Int(limit.range.upperBound) {
+            setEnd(minutes: Int(limit.range.upperBound))
+        }
     }
 
     /// Sets one of the page's settings, noting it as changed if it is.
@@ -129,6 +180,27 @@ struct RemotePage: View {
         guard newValue != value else { return }
         value = newValue
         changed.insert(setting)
+    }
+
+    /// Moves the end to about `minutes` from now, noting the time as changed if it is.
+    private func pickEnd(minutes: Int) {
+        let before = endMinute
+        setEnd(minutes: minutes)
+        if endMinute != before { changed.insert(.time) }
+    }
+
+    /// Within what the mode allows at this temperature and fan.
+    private func clamped(_ minutes: Int) -> Int {
+        let limit = runtimeLimit
+        return min(max(minutes, Int(limit.range.lowerBound)), Int(limit.range.upperBound))
+    }
+
+    /// Turns off about `minutes` from now, on the row's step, within what the mode allows.
+    private func setEnd(minutes: Int) {
+        let step = Int(runtimeLimit.step), now = Date()
+        var lasting = Format.minutesEndingOnStep(clamped(minutes), step: step, from: now)
+        if lasting > Int(runtimeLimit.range.upperBound) { lasting -= step }
+        endMinute = (Format.minuteOfDay(now) + lasting) % 1440
     }
 
     /// What the BedJet is doing from the Remote, or the Quick Remote's first button: Cool for 30 minutes.
@@ -142,6 +214,7 @@ struct RemotePage: View {
             fan = liveFan
             let step = Int(runtimeLimit.step)
             minutes = max(Int(endsAt.timeIntervalSinceNow / 60) / step * step, step)
+            endMinute = Format.endMinute(after: Int(endsAt.timeIntervalSinceNow), from: Date())
         } else {
             startsAir = true
             let first = PresetChoice.defaults[0].preset(fahrenheit: model.snapshot.useFahrenheit)
@@ -149,6 +222,7 @@ struct RemotePage: View {
             temperature = first.temperature
             fan = first.fanPercent
             minutes = first.minutes
+            setEnd(minutes: minutes)
         }
     }
 

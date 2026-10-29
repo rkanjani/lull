@@ -162,6 +162,27 @@ class CodecTest {
         assertEquals(1, latest?.extra?.programStep)
     }
 
+    @Test
+    fun clockTimeStepsEndAtTheirTimeOnTheSimulatedDevice() = runTest {
+        val link = DemoLink()
+        var latest: DeviceStatus? = null
+        link.onStatus = { latest = it }
+        val wake = ProgramStep(Mode.COOL, fanStep = 5, temperature = 44, hours = 6, minutes = 30, endsAtClockTime = true)
+        link.store(StoredProgram("Wake", listOf(wake)), 0)
+        // Sent by hand: `startProgram` would set the unit's clock to now.
+        link.send(Codec.setClock(22, 30))
+        link.send(Codec.startProgram(0))
+        assertEquals("from 22:30 to 6:30", 8 * 3600, latest?.remainingSeconds)
+        val pastMidnight = ProgramStep(Mode.COOL, fanStep = 5, temperature = 44, hours = 0, minutes = 10, endsAtClockTime = true)
+        link.store(StoredProgram("Late", listOf(pastMidnight)), 1)
+        link.send(Codec.setClock(23, 50))
+        link.send(Codec.startProgram(1))
+        assertEquals("from 23:50 to 0:10", 20 * 60, latest?.remainingSeconds)
+        // A demo that pretends the night started earlier still ends it at the time of day.
+        link.skipAhead(5)
+        assertTrue(20 * 60 - (latest?.remainingSeconds ?: 0) <= 1)
+    }
+
     /** Values follow the heat table in the official BedJet app (v1.0.6), which keeps the unit's safety cut-off. */
     @Test
     fun heatIsCutOffSoonerWhenHotterAndFaster() {

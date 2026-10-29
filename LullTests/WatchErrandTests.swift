@@ -15,6 +15,8 @@ final class WatchErrandTests: XCTestCase {
     private var units: [UUID: FakeLink] = [:]
 
     override func setUp() async throws {
+        // A starter schedule's wake time can be more than 16 hours away, which would make starting a night depend on the time of day.
+        AppModel.startsWithoutWakeTimes = true
         directory = FileManager.default.temporaryDirectory.appending(path: "WatchErrandTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defaults = UserDefaults(suiteName: "WatchErrandTests-\(UUID().uuidString)")
@@ -23,6 +25,7 @@ final class WatchErrandTests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        AppModel.startsWithoutWakeTimes = ProcessInfo.processInfo.arguments.contains("-noWakeTimes")
         for unit in units.values { unit.stop() }
         try? FileManager.default.removeItem(at: directory)
         AppModel.errandPatience = 8
@@ -74,7 +77,8 @@ final class WatchErrandTests: XCTestCase {
     private func save(_ saved: SavedBedJet) throws {
         let fleet = Saved.Fleet(bedJets: [saved], selected: saved.id)
         let file = directory.appending(path: "lull.json")
-        try JSONEncoder().encode(Saved(schedules: Schedule.templates, fleet: fleet)).write(to: file)
+        // The schedules Lull starts with here, without wake times, so the nights these tests start don't depend on the hour.
+        try JSONEncoder().encode(Saved(schedules: AppModel.startingSchedules, fleet: fleet)).write(to: file)
     }
 
     func testOffScreenAnErrandStartsTheNightThenLetsGo() async throws {
@@ -90,6 +94,26 @@ final class WatchErrandTests: XCTestCase {
         // Let go again, so another phone can take the BedJet over.
         XCTAssertGreaterThan(unit(mine.id).stops, stops)
         XCTAssertFalse(bedJet.isConnected)
+    }
+
+    func testANightWithAWakeTimeEndsAtIt() async throws {
+        let model = launch()
+        let bedJet = try await chosen(mine, in: model)
+        // Two hours of cooling, ending three hours from now whatever the usual bedtime is: each hour stretches to an hour and a half.
+        let wake = (Format.minuteOfDay(Date()) + 180) % 1440
+        let schedule = Schedule(name: "Wake", phases: [Phase(.cool, minutes: 60), Phase(.cool, fan: 20, minutes: 60)], wakeTime: wake)
+        model.save(schedule)
+        bedJet.tonightID = schedule.id
+
+        let reply = await model.runErrand(.startNight(bedJet.id))
+        XCTAssertEqual(reply, .done)
+        let run = try XCTUnwrap(bedJet.run)
+        XCTAssertEqual(run.schedule.totalMinutes, run.schedule.minutesToWake(startingAt: Format.minuteOfDay(run.startedAt)))
+        XCTAssertTrue((179...180).contains(run.schedule.totalMinutes), "three hours from the start, a minute either way")
+        // The BedJet is given tonight's lengths, and keeps to the wake time itself.
+        let slot = try XCTUnwrap(bedJet.slot)
+        XCTAssertEqual(bedJet.deviceSlots[slot]?.steps.first, run.schedule.phases.first?.step)
+        XCTAssertEqual(bedJet.deviceSlots[slot]?.steps.last, schedule.phases.last?.step(endingAt: wake))
     }
 
     func testWokenOffScreenNothingConnectsUntilAnErrandNeedsIt() async throws {
@@ -301,7 +325,7 @@ final class WatchErrandTests: XCTestCase {
 
     func testWhatARefreshFindsWentWrongWaitsForLullToBeOpened() async throws {
         // Started from this phone an hour ago, and ended early by the BedJet since.
-        let night = ActiveRun(schedule: Schedule.templates[0], startedAt: Date().addingTimeInterval(-3600))
+        let night = ActiveRun(schedule: AppModel.startingSchedules[0], startedAt: Date().addingTimeInterval(-3600))
         try save(SavedBedJet(unit: mine.id, name: mine.name, generation: .v3, run: night))
         let model = launch(onScreen: false)
         let bedJet = try XCTUnwrap(model.bedJet)
@@ -317,7 +341,7 @@ final class WatchErrandTests: XCTestCase {
 
     func testWhatAnErrandFindsBeforeItsOwnCommandIsntHowItWent() async throws {
         // Started from this phone an hour ago, and ended early by the BedJet since.
-        let night = ActiveRun(schedule: Schedule.templates[0], startedAt: Date().addingTimeInterval(-3600))
+        let night = ActiveRun(schedule: AppModel.startingSchedules[0], startedAt: Date().addingTimeInterval(-3600))
         try save(SavedBedJet(unit: mine.id, name: mine.name, generation: .v3, run: night))
         let model = launch(onScreen: false)
         let bedJet = try XCTUnwrap(model.bedJet)

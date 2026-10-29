@@ -59,12 +59,11 @@ import com.rohankanjani.lull.activity
 import com.rohankanjani.lull.bedjetkit.Codec
 import com.rohankanjani.lull.bedjetkit.LinkState
 import com.rohankanjani.lull.bedjetkit.Mode
+import com.rohankanjani.lull.spokenSummary
+import com.rohankanjani.lull.summary
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.time.Instant
 import java.time.LocalDate
-import java.time.LocalTime
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.UUID
@@ -84,19 +83,19 @@ fun ScheduleScreen(model: AppModel) {
     Screen(model, "Schedule", subtitle = today) {
         val tonight = bedJet.tonight
         val elsewhere = bedJet.runningElsewhereStep
-        when {
-            run != null -> {
-                var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-                LaunchedEffect(run) {
-                    while (true) {
-                        now = System.currentTimeMillis()
-                        delay(30_000)
-                    }
-                }
-                Running(model, run, now)
+        // Redrawn as time passes: a running night moves on, and with a wake time how long tonight's runs, and whether it
+        // can, depend on when it starts. Read afresh whenever the night shown changes.
+        var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+        LaunchedEffect(run, tonight) {
+            while (true) {
+                now = System.currentTimeMillis()
+                delay(30_000)
             }
+        }
+        when {
+            run != null -> Running(model, run, now)
             elsewhere != null -> RunningElsewhere(model, elsewhere)
-            tonight != null -> Planned(model, tonight, onEdit = { editing = it })
+            tonight != null -> Planned(model, tonight, now, onEdit = { editing = it })
             else -> Card {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("No schedules yet", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
@@ -111,7 +110,7 @@ fun ScheduleScreen(model: AppModel) {
             others.forEach { schedule -> ScheduleRow(model, schedule, onEdit = { editing = it }) }
         }
         PrimaryButton(
-            onClick = { editing = Schedule("New schedule", listOf(Phase(Mode.COOL, fanPercent = 40, minutes = 240))) },
+            onClick = { editing = Schedule.blank() },
             prominent = false,
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -122,11 +121,6 @@ fun ScheduleScreen(model: AppModel) {
     }
 
     editing?.let { schedule -> ScheduleEditor(model, schedule, onDismiss = { editing = null }) }
-}
-
-private fun minuteOfDay(millis: Long): Int {
-    val time = LocalTime.ofInstant(Instant.ofEpochMilli(millis), ZoneId.systemDefault())
-    return time.hour * 60 + time.minute
 }
 
 private fun duplicate(model: AppModel, schedule: Schedule) {
@@ -140,7 +134,7 @@ private fun scheduleActions(model: AppModel, schedule: Schedule) = listOf(
 )
 
 @Composable
-private fun Planned(model: AppModel, schedule: Schedule, onEdit: (Schedule) -> Unit) {
+private fun Planned(model: AppModel, schedule: Schedule, now: Long, onEdit: (Schedule) -> Unit) {
     val bedJet = LocalBedJet.current
     WithMenu(model, schedule, onEdit) { openMenu ->
         Card(Modifier.combinedClickable(onClick = {}, onLongClick = openMenu, indication = null, interactionSource = null)) {
@@ -165,8 +159,10 @@ private fun Planned(model: AppModel, schedule: Schedule, onEdit: (Schedule) -> U
                             },
                     )
                 }
-                NightTimeline(model, schedule, startMinute = minuteOfDay(System.currentTimeMillis()))
-                val problem = bedJet.problem(schedule)
+                // Started now: with a wake time, the last phase runs until it from now.
+                val startMinute = Format.minuteOfDay(now)
+                NightTimeline(model, schedule.resolved(startingAt = startMinute), startMinute = startMinute)
+                val problem = bedJet.problem(schedule, now)
                 if (problem != null) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Icon(Icons.Filled.WarningAmber, null, tint = Theme.secondary, modifier = Modifier.size(18.dp))
@@ -237,7 +233,7 @@ private fun Running(model: AppModel, run: ActiveRun, now: Long) {
                     )
                 }
             }
-            NightTimeline(model, run.schedule, startMinute = minuteOfDay(run.startedAt), progress = run.progress(now))
+            NightTimeline(model, run.schedule, startMinute = Format.minuteOfDay(run.startedAt), progress = run.progress(now))
             PrimaryButton("End Night", onClick = { model.scope.launch { bedJet.endNight() } }, prominent = false, enabled = !bedJet.isBusy)
         }
     }
@@ -262,7 +258,6 @@ private fun ScheduleRow(model: AppModel, schedule: Schedule, onEdit: (Schedule) 
     val canSwap = bedJet.run == null
     // At the largest text sizes Use Tonight goes under the card rather than over its corner.
     val beneath = isLargeText()
-    val phases = "${schedule.phases.size} ${if (schedule.phases.size == 1) "phase" else "phases"}"
     Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         WithMenu(model, schedule, onEdit) { openMenu ->
             Box {
@@ -271,7 +266,7 @@ private fun ScheduleRow(model: AppModel, schedule: Schedule, onEdit: (Schedule) 
                         .clip(RoundedCornerShape(28.dp))
                         .combinedClickable(onClick = { onEdit(schedule) }, onLongClick = openMenu)
                         .clearAndSetSemantics {
-                            contentDescription = "${schedule.name}, ${Format.spokenDuration(schedule.totalMinutes)}, $phases"
+                            contentDescription = "${schedule.name}, ${schedule.spokenSummary}"
                             role = Role.Button
                             onClick(label = "Edit this schedule") { onEdit(schedule); true }
                             customActions = scheduleActions(model, schedule)
@@ -286,7 +281,7 @@ private fun ScheduleRow(model: AppModel, schedule: Schedule, onEdit: (Schedule) 
                         )
                         NightCurve(schedule.phases, Modifier.fillMaxWidth().height(64.dp), lineWidth = 2.5.dp)
                         Text(
-                            "${Format.duration(schedule.totalMinutes)} · $phases",
+                            schedule.summary,
                             fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Theme.secondary,
                         )
                     }

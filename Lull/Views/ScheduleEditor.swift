@@ -5,10 +5,18 @@ struct ScheduleEditor: View {
     @Environment(AppModel.self) private var model
     @Environment(BedJet.self) private var bedJet
     @Environment(\.dismiss) private var dismiss
-    @State var schedule: Schedule
+    @State private var schedule: Schedule
     @State private var selection: Phase.ID?
+    /// A wake time set in this editor, kept while Bedtime is chosen so choosing Wake time again brings it back.
+    @State private var setWakeTime: Int?
     @FocusState private var nameFocused: Bool
     @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// With a wake time, opens on the night fitted to run from the usual bedtime to it, which one saved before Lull fitted it
+    /// may not be.
+    init(schedule: Schedule) {
+        _schedule = State(initialValue: schedule.fitted())
+    }
 
     var body: some View {
         NavigationStack {
@@ -36,21 +44,32 @@ struct ScheduleEditor: View {
                             .animation(.smooth(duration: 0.35), value: schedule.phases)
                     }
 
-                    bedtimeRow
+                    nightCard
 
-                    Eyebrow("Phases").accessibilityAddTraits(.isHeader)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Eyebrow("Phases").accessibilityAddTraits(.isHeader)
+                        // What the lengths below mean, so it sits with them rather than with the night's times.
+                        Text(schedule.phasesCaption)
+                            .scaledFont(13)
+                            .foregroundStyle(Theme.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     VStack(spacing: 10) {
+                        // Each phase starts where the one before it ends, from the usual bedtime: with a wake time, on a usual night.
                         ForEach(Array(schedule.phases.enumerated()), id: \.element.id) { index, phase in
                             PhaseRow(phase: phase, number: index + 1, startsAt: schedule.startMinute(of: phase),
-                                     onDelete: schedule.phases.count > 1 ? { schedule.phases.removeAll { $0.id == phase.id } } : nil) {
+                                     isFixed: schedule.wakeTime != nil && phase.hasFixedLength,
+                                     onDelete: schedule.phases.count > 1 ? { remove(phase.id) } : nil) {
                                 selection = phase.id
                             }
                         }
                     }
                     if schedule.phases.count < Limits.stepsPerProgram {
                         Button {
+                            // With a wake time it takes its hour from the phases that stretch or shrink, as far as they have it.
                             let phase = Phase(.cool, fan: 30, minutes: 60)
                             schedule.phases.append(phase)
+                            schedule = schedule.fitted(holding: phase.id)
                             selection = phase.id
                         } label: {
                             Label("Add Phase", systemImage: "plus")
@@ -88,8 +107,10 @@ struct ScheduleEditor: View {
             }
             .sheet(isPresented: .init(get: { selectedIndex != nil }, set: { if !$0 { selection = nil } })) {
                 if let index = selectedIndex {
-                    PhaseEditor(phase: $schedule.phases[index], canDelete: schedule.phases.count > 1) {
-                        schedule.phases.remove(at: index)
+                    PhaseEditor(phase: phase(at: index), canDelete: schedule.phases.count > 1,
+                                durationSteps: schedule.durationSteps(of: schedule.phases[index]),
+                                scaling: schedule.scalingNote(of: schedule.phases[index])) {
+                        remove(schedule.phases[index].id)
                     }
                 }
             }
@@ -100,32 +121,77 @@ struct ScheduleEditor: View {
         !schedule.name.trimmingCharacters(in: .whitespaces).isEmpty && !schedule.phases.isEmpty
     }
 
-    private var bedtimeRow: some View {
-        // At the largest text sizes the time goes under its label rather than squeezing it into a sliver.
+    /// A phase as its sheet edits it. With a wake time the night still ends at it: the phase keeps the length it's given,
+    /// and the phases that stretch or shrink share the rest.
+    private func phase(at index: Int) -> Binding<Phase> {
+        Binding { schedule.phases[index] } set: { phase in
+            schedule.phases[index] = phase
+            schedule = schedule.fitted(holding: phase.id)
+        }
+    }
+
+    /// With a wake time the phases that stretch or shrink take up the time a removed one leaves.
+    private func remove(_ id: Phase.ID) {
+        schedule.phases.removeAll { $0.id == id }
+        schedule = schedule.fitted()
+    }
+
+    /// When the night starts and ends. Without a wake time it runs from the usual bedtime for as long as its phases. With one
+    /// the phases are fitted to run from the usual bedtime to the wake time, and stretch or shrink to end at it whenever
+    /// Start Night is pressed.
+    private var nightCard: some View {
+        // At the largest text sizes each time goes under its label rather than squeezing it into a sliver.
         let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout())
         return Card(padding: 16) {
-            layout {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Usual bedtime").scaledFont(17, .medium)
-                    Text("Wake around \(Format.clock(schedule.bedtime + schedule.totalMinutes))")
-                        .scaledFont(13)
-                        .foregroundStyle(Theme.secondary)
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Night").scaledFont(15, .medium).foregroundStyle(Theme.secondary).accessibilityAddTraits(.isHeader)
+                // A wake time or the usual bedtime alone, chosen as the Remote chooses Timer or Time. Choosing Bedtime keeps the
+                // wake time set here, so choosing Wake time again brings it back until the schedule is saved or cancelled.
+                Picker("Night ends", selection: Binding { schedule.wakeTime != nil } set: { endsAtWakeTime in
+                    withAnimation(.smooth(duration: 0.25)) {
+                        if endsAtWakeTime {
+                            schedule.wakeTime = setWakeTime ?? schedule.usualWakeTime
+                            schedule = schedule.fitted()
+                        } else {
+                            setWakeTime = schedule.wakeTime
+                            schedule.wakeTime = nil
+                        }
+                    }
+                }) {
+                    Text("Wake time").tag(true)
+                    Text("Bedtime").tag(false)
                 }
-                .accessibilityElement(children: .combine)
-                Spacer(minLength: 0)
-                DatePicker("Bedtime", selection: bedtime, displayedComponents: .hourAndMinute)
-                    .labelsHidden()
+                .pickerStyle(.segmented)
+                // The usual bedtime stays where it is, the wake time under it when there is one.
+                VStack(alignment: .leading, spacing: 0) {
+                    timeRow("Usual bedtime", selection: time({ schedule.bedtime }, { schedule.bedtime = $0 }), layout: layout)
+                    if schedule.wakeTime != nil {
+                        timeRow("Wake time", selection: time({ schedule.wakeTime ?? schedule.usualWakeTime }, { schedule.wakeTime = $0 }), layout: layout)
+                            .transition(.opacity)
+                    }
+                }
             }
         }
     }
 
-    private var bedtime: Binding<Date> {
-        Binding {
-            Calendar.current.date(bySettingHour: schedule.bedtime / 60, minute: schedule.bedtime % 60, second: 0, of: Date()) ?? Date()
-        } set: { date in
-            let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
-            schedule.bedtime = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+    /// A setting's name with its time of day after it, as tall as the Remote's time row and Android's.
+    private func timeRow(_ title: String, selection: Binding<Date>, layout: AnyLayout) -> some View {
+        layout {
+            // Read before the picker, which VoiceOver calls only "Time Picker".
+            Text(title).scaledFont(17, .medium)
+            Spacer(minLength: 0)
+            DatePicker(title, selection: selection, displayedComponents: .hourAndMinute)
+                .labelsHidden()
         }
+        .frame(minHeight: timeRowHeight)
+    }
+
+    /// The usual bedtime or the wake time, the phases fitted afresh to the night between them when either changes.
+    private func time(_ get: @escaping () -> Int, _ set: @escaping (Int) -> Void) -> Binding<Date> {
+        timeOfDayBinding(get: get, set: { minute in
+            set(minute)
+            schedule = schedule.fitted()
+        })
     }
 
     private var selectedIndex: Int? {
@@ -139,6 +205,8 @@ private struct PhaseRow: View {
     let phase: Phase
     let number: Int
     let startsAt: Int
+    /// Keeps its length while a wake time scales the rest of the night.
+    let isFixed: Bool
     /// Nil when this is the only phase, which can't be removed.
     let onDelete: (() -> Void)?
     let action: () -> Void
@@ -165,7 +233,10 @@ private struct PhaseRow: View {
                     }
                     if !large { Spacer() }
                     VStack(alignment: large ? .leading : .trailing, spacing: 3) {
-                        Text(Format.duration(phase.minutes)).scaledFont(15, .medium)
+                        HStack(spacing: 4) {
+                            if isFixed { Image(systemName: "lock.fill").scaledFont(11, .semibold).foregroundStyle(Theme.secondary) }
+                            Text(Format.duration(phase.minutes)).scaledFont(15, .medium)
+                        }
                         Text(Format.clock(startsAt)).scaledFont(13).foregroundStyle(Theme.secondary)
                     }
                     .monospacedDigit()
@@ -178,7 +249,7 @@ private struct PhaseRow: View {
             .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Theme.hairline))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Phase \(number), \(model.spokenSummary(of: phase)), starts \(Format.clock(startsAt))")
+        .accessibilityLabel("Phase \(number), \(model.spokenSummary(of: phase))\(isFixed ? ", fixed length" : ""), starts \(Format.clock(startsAt))")
         .accessibilityHint("Edits this phase")
         .accessibilityActions {
             if let onDelete { Button("Remove Phase", role: .destructive, action: onDelete) }
@@ -199,6 +270,11 @@ private struct PhaseEditor: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var phase: Phase
     let canDelete: Bool
+    /// The lengths the Duration slider offers. Nil when there's nothing to choose, as for the only phase that stretches or
+    /// shrinks to fill the night.
+    let durationSteps: ClosedRange<Int>?
+    /// With a wake time, whether this phase stretches or shrinks with the night, or why the night can't.
+    let scaling: String?
     let onDelete: () -> Void
     @State private var contentHeight: CGFloat = 450
 
@@ -224,7 +300,11 @@ private struct PhaseEditor: View {
             HStack {
                 Text("Phase").scaledFont(22, .bold).accessibilityAddTraits(.isHeader)
                 Spacer()
-                Button("Done") { dismiss() }.scaledFont(17, .semibold)
+                // Tappable across the 44 points Apple asks for, not just its text, as Android's 48dp buttons are.
+                Button { dismiss() } label: {
+                    Text("Done").frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+                }
+                .scaledFont(17, .semibold)
             }
             ModePicker(modes: bedJet.phaseModes, selection: phase.mode) { mode in
                 phase.mode = mode
@@ -236,8 +316,26 @@ private struct PhaseEditor: View {
             if phase.mode.usesFan {
                 LabeledSlider(title: "Fan", valueText: "\(phase.fanPercent)%", value: fan, range: 5...100, step: 5, tint: phase.mode.tint)
             }
-            LabeledSlider(title: "Duration", valueText: Format.duration(phase.minutes), spokenValue: Format.spokenDuration(phase.minutes), value: minutes,
-                          range: 5...Double(phase.maxMinutes / 5 * 5), step: 5, tint: .white)
+            if let durationSteps {
+                LabeledSlider(title: "Duration", valueText: Format.duration(phase.minutes), spokenValue: Format.spokenDuration(phase.minutes),
+                              value: minutes, range: Double(durationSteps.lowerBound)...Double(durationSteps.upperBound), step: 5, tint: .white)
+            } else {
+                ValueHeader(title: "Duration", value: Format.duration(phase.minutes))
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Duration")
+                    .accessibilityValue(Format.spokenDuration(phase.minutes))
+            }
+            if scaling != nil {
+                Toggle("Fixed length", isOn: fixedLength)
+                    .scaledFont(17, .medium)
+                    .tint(.green)
+            }
+            if let scaling {
+                Text(scaling)
+                    .scaledFont(13)
+                    .foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if isHeatLimited {
                 Text("At this temperature and fan, BedJet heats for up to \(Format.duration(phase.maxMinutes)) before its safety cut-off."
                      + (bedJet.generation.supports(.extendedHeat) ? " Use Gentle heat to run longer." : ""))
@@ -246,11 +344,10 @@ private struct PhaseEditor: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if canDelete {
-                Button("Remove Phase", role: .destructive) {
-                    onDelete()
+                Button(role: .destructive) { onDelete() } label: {
+                    Text("Remove Phase").frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
                 }
                 .scaledFont(17, .medium)
-                .frame(maxWidth: .infinity, minHeight: 44)
             }
         }
         .padding(24)
@@ -258,6 +355,10 @@ private struct PhaseEditor: View {
     }
 
     private var isHeatLimited: Bool { phase.maxMinutes < phase.mode.maxMinutes }
+
+    private var fixedLength: Binding<Bool> {
+        Binding { phase.hasFixedLength } set: { phase.fixedLength = $0 ? true : nil }
+    }
 
     private var fan: Binding<Double> {
         Binding { Double(phase.fanPercent) } set: { phase.fanPercent = Int($0) }

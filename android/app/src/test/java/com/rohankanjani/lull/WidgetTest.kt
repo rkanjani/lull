@@ -45,6 +45,19 @@ class WidgetTest {
     }
 
     @Test
+    fun aRunStartedLateStillEndsAtTheWakeTime() {
+        // Two hours of cooling ending at 6:30, started at 11:30 p.m.: each hour stretches to three and a half.
+        val schedule = Schedule(
+            "Wake", listOf(Phase(Mode.COOL, minutes = 60), Phase(Mode.COOL, fanPercent = 20, minutes = 60)), wakeTime = 6 * 60 + 30,
+        )
+        val run = ActiveRun(schedule.resolved(startingAt = Format.minuteOfDay(now)), startedAt = now)
+        val wake = LocalDateTime.of(2026, 10, 22, 6, 30).atZone(zone).toInstant().toEpochMilli()
+        assertEquals(wake, run.endsAt)
+        assertEquals(listOf(now + 210 * 60_000L, wake), run.phaseEnds)
+        assertEquals(wake, WidgetSnapshot(tonight = schedule, run = run).redraws(now).last())
+    }
+
+    @Test
     fun phaseEndsAddUpToTheNight() {
         val run = running(startedMinutesAgo = 0).run!!
         assertEquals(schedule.phases.size, run.phaseEnds.size)
