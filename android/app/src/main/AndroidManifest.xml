@@ -50,6 +50,26 @@
             android:name=".CommandActivity"
             android:exported="false"
             android:theme="@android:style/Theme.NoDisplay" />
+        <!--
+            Automations for apps such as Tasker, the iPhone app's Shortcuts actions as intents. Any app on the phone
+            can send them, as it can open Lull's screen; the BedJet's own limits still apply. docs/AUTOMATIONS.md
+            lists them.
+        -->
+        <receiver
+            android:name=".AutomationReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.rohankanjani.lull.START_NIGHT" />
+                <action android:name="com.rohankanjani.lull.TURN_ON" />
+                <action android:name="com.rohankanjani.lull.TURN_OFF" />
+                <action android:name="com.rohankanjani.lull.SET_TEMPERATURE" />
+                <action android:name="com.rohankanjani.lull.SET_FAN" />
+                <action android:name="com.rohankanjani.lull.SET_RUN_TIME" />
+                <action android:name="com.rohankanjani.lull.SET_LIGHT_RING" />
+                <action android:name="com.rohankanjani.lull.MUTE_BEEPS" />
+                <action android:name="com.rohankanjani.lull.GET_STATUS" />
+            </intent-filter>
+        </receiver>
 
         <!-- Home Screen widgets. Like the iPhone app's, they read what the app last saved. -->
         <receiver

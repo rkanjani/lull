@@ -38,7 +38,7 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Bluetooth transport | `BedJetKit/.../BLELink.swift` | `android/app/src/main/java/com/rohankanjani/lull/BleLink.kt` |
 | Hand-over UUID | `BLELink.handoffUUID` | `android/bedjetkit/.../Handoff.kt` |
 | BedJets nearby, and binding a link to its unit | `BedJetKit/.../Discovery.swift`, `BLELink.takes` | `android/bedjetkit/.../Discovery.kt` (with `takes`), `android/app/.../BleDiscovery.kt` |
-| App state: the BedJets, schedules, settings | `Lull/AppModel.swift` | `android/app/.../AppModel.kt` |
+| App state: the BedJets, schedules, settings | `Lull/AppModel.swift` | `android/app/.../AppModel.kt` (`AppModel.shared`, one per app as on iOS) |
 | One BedJet: connection, night, history | `Lull/BedJet.swift` | `android/app/.../BedJet.kt` |
 | Code the phone, its widgets and its watch app all use | `Shared/` | `android/shared/` (same package, `com.rohankanjani.lull`) |
 | Schedules, phases, templates, formatting | `Shared/Schedule.swift` | `android/shared/.../Schedule.kt` |
@@ -54,6 +54,8 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Launch and lifecycle | `Lull/LullApp.swift` | `android/app/.../MainActivity.kt` |
 | What widgets are handed, and what each BedJet is doing | `Shared/WidgetSnapshot.swift`, `Shared/LiveStatus.swift` | `android/shared/.../WidgetSnapshot.kt`, `LiveStatus.kt` |
 | Start Night and tab links from outside the app | `Shared/Intents.swift` | `android/shared/.../Commands.kt` (tabs and presets), `android/app/.../AppCommands.kt` (buttons open Lull through its unexported `CommandActivity`) |
+| Shortcuts actions and automations | `Lull/BedJetIntents.swift`, `Shared/Shortcuts.swift` | `android/app/.../AutomationReceiver.kt` (intents for automation apps) |
+| What an action does, its words and limits | `Lull/Automation.swift`, and the Automation part of `Lull/BedJet.swift` | `android/app/.../Automation.kt`, and the Automation part of `BedJet.kt` |
 | Tonight widget | `LullWidgets/TonightWidget.swift`, `Shared/NightProvider.swift`, `Shared/TonightAccessory.swift` (Lock Screen) | `android/app/.../widgets/TonightWidget.kt` |
 | Last Night widget | `LullWidgets/LastNightWidget.swift` | `android/app/.../widgets/LastNightWidget.kt` |
 | Picking the BedJet a widget shows | `BedJetEntity`, `BedJetConfiguration` and `BothSidesConfiguration` in `Shared/Intents.swift` | `android/app/.../widgets/BedJetConfigureActivity.kt` |
@@ -70,10 +72,11 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Tonight on the watch face | `LullWatchWidgets/TonightComplication.swift` | `android/wear/.../TonightComplication.kt`, `TonightTile.kt` |
 | Protocol tests | `BedJetKit/Tests/BedJetKitTests/CodecTests.swift`, `CodecV2Tests.swift`, `DiscoveryTests.swift` | `android/bedjetkit/src/test/.../CodecTest.kt`, `CodecV2Test.kt`, `DiscoveryTest.kt` |
 | App logic tests, including wake times | `LullTests/ScheduleTests.swift` | `android/app/src/test/.../ScheduleTest.kt` |
-| Choosing, switching and forgetting BedJets | `LullTests/DeviceSelectionTests.swift` | `android/app/src/androidTest/.../DeviceSelectionTest.kt` (on a device, since the model needs Android) |
+| Choosing, switching and forgetting BedJets, and actions from automations | `LullTests/DeviceSelectionTests.swift` | `android/app/src/androidTest/.../DeviceSelectionTest.kt` (on a device, since the model needs Android) |
 | How the Remote times air: longest, a duration or a time | `LullTests/RemoteTimerTests.swift` | `android/app/src/androidTest/.../RemoteTimerTest.kt` (on a device, since the model needs Android) |
 | Widget tests | `LullTests/WidgetTests.swift` | `android/app/src/test/.../WidgetTest.kt` |
 | Live Activity and Live Update tests | `LullTests/LiveStatusTests.swift`, `LiveActivitiesTests.swift`, `LullUITests/LiveActivityTests.swift` | `android/app/src/test/.../LiveStatusTest.kt`, `android/app/src/androidTest/.../LiveNotificationsTest.kt`, `LiveUpdateTest.kt` |
+| Automation tests | `LullTests/AutomationTests.swift` | `android/app/src/test/.../AutomationTest.kt` |
 | Widget UI tests | `LullUITests/HomeScreenWidgetTests.swift` | `android/app/src/androidTest/.../WidgetUiTest.kt`, `BedJetPickerTest.kt` and `QuickRemotePickerTest.kt` (the widgets' editors, which are system UI on iOS) |
 | Contrast tests | `LullTests/ContrastTests.swift` | `android/app/src/test/.../ContrastTest.kt` |
 | Screen reader and text size tests | `LullTests/VoiceOverTests.swift`, `LullUITests/AccessibilityTests.swift` | `android/app/src/androidTest/.../AccessibilityTest.kt` (with the semantics checks in `LullUiTest.kt`) |
@@ -159,7 +162,21 @@ Platform conventions, not behaviour:
   advertisement (`HandoffRequests`). Android runs one advertisement per BedJet side by side.
 - Android phones have no Lock Screen or StandBy widgets, so the Tonight and Last Night widgets are Home
   Screen only. Quick Settings tiles stand in for the Control Center controls, and app shortcuts (long-press
-  the icon) for Siri and App Shortcuts. Both open Lull to start the night, as the iOS control does.
+  the icon: Start Night, Turn On, Turn Off and Remote) for Siri and App Shortcuts. Both open Lull and act there,
+  as the iOS control does, setting the BedJet only once it's free; on iOS, Siri runs the actions without opening Lull.
+- Android has no Shortcuts app, so Lull's Shortcuts actions are intents that automation apps such as Tasker send
+  (`AutomationReceiver`), with the same actions, options, defaults and words. A `RESULT` broadcast says how each
+  went, in place of what Shortcuts shows. Where iOS offers to continue in Lull, which asks another phone for the
+  BedJet as the controls do, Android replies `needs_lull` and leaves it to the person to open Lull: only Lull's own
+  buttons can act through its screen (`CommandActivity`), so no other app can take a BedJet from another phone.
+  Android names BedJets and schedules by the name Lull shows
+  rather than picking them from a list, so it has a few words of its own for a name it doesn't know.
+- A background action on Android runs as an expedited WorkManager job, since a broadcast can't run long enough and
+  Android 12 and later won't start a foreground service from the background. The jobs share one queue, so they run
+  one at a time in the order sent, as Shortcuts runs actions, Get BedJet Status included. A job can start late when the
+  phone saves battery, and an action more than 2 minutes late is skipped, though a status is still answered. iOS runs
+  the action in Lull's process for as long as Shortcuts allows, which its Bluetooth background modes
+  (`Lull/Info.plist`) make possible.
 - A running BedJet shows as a Live Activity (Dynamic Island and Lock Screen) on iOS and as an ongoing
   notification promoted to a Live Update (status bar chip) on Android; where Android doesn't promote it
   (Android 16's first release, as seen on its emulator), it stays an ordinary ongoing notification. Android

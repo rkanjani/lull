@@ -31,6 +31,9 @@ room, or run out of battery; the night keeps going.
 - **Live Activity**: while a night or the Remote is running, its time left shows in the Dynamic Island and on the
   Lock Screen, with both sides of the bed together when two BedJets run. On Android, a Live Update in the status bar
   does the same.
+- **Automations**: Shortcuts actions on iPhone, and intents for apps such as Tasker on Android, to start a
+  schedule, preheat, set the air or turn it off, without opening Lull. [docs/AUTOMATIONS.md](docs/AUTOMATIONS.md)
+  lists them.
 - **Two phones, one BedJet**: the BedJet only accepts one connection, so Lull hands it over between
   phones automatically, iPhone or Android.
 - **Your BedJet, never a neighbour's**: you pick your BedJet from the ones nearby, and Lull only ever

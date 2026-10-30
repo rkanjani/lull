@@ -9,6 +9,8 @@ import com.rohankanjani.lull.bedjetkit.LinkState
 import com.rohankanjani.lull.bedjetkit.takes
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * A BedJet for tests. It speaks like the simulated one, but connects only when allowed, records every command,
@@ -28,6 +30,13 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
     var holdsSends = false
     /** Off, the unit takes commands but its reports never arrive, as when Lull lets go of it first. */
     var reports = true
+    /**
+     * On, letting go takes a moment, as over Bluetooth: the link still says it's ready until the connection drops, but
+     * nothing sent on it arrives, and asking for the unit meanwhile connects once it has dropped.
+     */
+    var dropsSlowly = false
+    private var isDropping = false
+    private var connectsAfterDrop = false
     val sent = mutableListOf<List<Byte>>()
     var stops = 0
         private set
@@ -75,14 +84,28 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
             onStateChange?.invoke(LinkState.YIELDED)
             return
         }
+        if (isDropping) {
+            connectsAfterDrop = true
+            return
+        }
         device.answers = answers
         device.start()
     }
 
     override fun stop() {
         stops += 1
-        device.stop()
+        connectsAfterDrop = false
+        if (!dropsSlowly || state != LinkState.READY) return device.stop()
+        isDropping = true
+        scope.launch {
+            delay(300)
+            isDropping = false
+            device.stop()
+            if (connectsAfterDrop) connectIfFree()
+        }
     }
+
+    override suspend fun writeWiFi(network: ByteArray, password: ByteArray) = device.writeWiFi(network, password)
 
     override fun requestControl() {
         requests += 1
@@ -92,13 +115,13 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
 
     override suspend fun send(command: ByteArray) {
         if (holdsSends) CompletableDeferred<Unit>().also { held += it }.await()
-        if (state != LinkState.READY) throw BedJetError.NotConnected
+        if (state != LinkState.READY || isDropping) throw BedJetError.NotConnected
         sent += command.toList()
         device.send(command)
     }
 
     override suspend fun query(request: Int): ByteArray {
-        if (state != LinkState.READY) throw BedJetError.NotConnected
+        if (state != LinkState.READY || isDropping) throw BedJetError.NotConnected
         return device.query(request)
     }
 
