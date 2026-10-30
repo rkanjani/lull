@@ -194,6 +194,21 @@ final class DeviceSelectionTests: XCTestCase {
         XCTAssertEqual(model.bedJet?.unit, guest.id)
     }
 
+    /// A real BedJet 3 sends each report in two halves, and right after reconnecting, such as after restarting to check
+    /// for firmware, only the first half comes for a moment. Its settings stay shown meanwhile, so the sheet holds still.
+    func testSettingsStayWhileAReportsSecondHalfIsLate() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        try await waitUntil("a full report") { bedJet.settings != nil }
+        let settings = bedJet.settings
+        var firstHalf = try XCTUnwrap(bedJet.status)
+        firstHalf.extra = nil
+        unit(mine.id).report(firstHalf)
+        XCTAssertNil(bedJet.status?.extra)
+        XCTAssertEqual(bedJet.settings, settings)
+    }
+
     func testACommandMeantForOneBedJetNeverReachesAnother() async throws {
         let model = launch()
         model.choose(mine)

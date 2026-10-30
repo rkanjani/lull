@@ -404,6 +404,7 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Lull uses Bluetooth to talk to your BedJet.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Lull uses your location only to see which Wi-Fi network this iPhone is on, to offer it to your BedJet. It isn't kept.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
@@ -435,6 +436,7 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Lull uses Bluetooth to talk to your BedJet.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Lull uses your location only to see which Wi-Fi network this iPhone is on, to offer it to your BedJet. It isn't kept.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;

@@ -50,6 +50,7 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | BedJet sheet, BedJets nearby, choosing a BedJet | `Lull/Views/DeviceSheet.swift` | `android/app/.../ui/DeviceSheet.kt` |
 | History tab | `Lull/Views/HistoryView.swift` | `android/app/.../ui/HistoryScreen.kt` |
 | Launch and lifecycle | `Lull/LullApp.swift` | `android/app/.../MainActivity.kt` |
+| Wi-Fi networks to offer a BedJet 3 | `Lull/WiFiNetworks.swift` (the iPhone's own) | `android/app/.../WiFiNetworks.kt` (those nearby) |
 | What widgets are handed | `Shared/WidgetSnapshot.swift` | `android/app/.../WidgetSnapshot.kt` |
 | Start Night and tab links from outside the app | `Shared/Intents.swift` | `android/app/.../Commands.kt` |
 | Tonight widget | `LullWidgets/TonightWidget.swift` | `android/app/.../widgets/TonightWidget.kt` |
@@ -124,6 +125,9 @@ Platform conventions, not behaviour:
 - Android phones have no Lock Screen or StandBy widgets, so the Tonight and Last Night widgets are Home
   Screen only. Quick Settings tiles stand in for the Control Center controls, and app shortcuts (long-press
   the icon) for Siri and App Shortcuts. Both open Lull to start the night, as the iOS control does.
+- An iPhone can't list the Wi-Fi networks around it, so the Wi-Fi screen offers only the network the iPhone is on,
+  where Android lists the 2.4 GHz networks nearby (`WiFiNetworksTest` is Android only). Both need location access,
+  asked for on that screen, and both offer Other Network for any name.
 - iOS widget UI tests place the widgets on the Home and Lock Screens through Springboard. Android's draw each
   widget at each size with Glance's test runner, since launchers differ too much to drive.
 

@@ -97,6 +97,11 @@ once, before the first release with widgets:
 The release lane signs both targets and gives the widgets the app's version, so only the app's
 **Version** needs raising.
 
+The app also uses **Access Wi-Fi Information**, to offer a BedJet 3 the network the iPhone is on. Its
+distribution profile only includes that once the capability is on for `com.rohankanjani.lull`: building
+to a connected iPhone with automatic signing turns it on, or tick it under the identifier's
+Capabilities in Certificates, Identifiers & Profiles.
+
 ### 5. Turn it on
 
 ```bash

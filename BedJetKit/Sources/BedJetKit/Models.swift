@@ -154,6 +154,8 @@ public struct DeviceStatus: Equatable, Sendable {
         public var programStep: Int
         /// One of `Codec.Notification`. The unit repeats it until it is acknowledged.
         public var notification: Int
+        /// One of `Codec.WiFiPhase`: how far a BedJet 3 is in joining Wi-Fi or checking for firmware, or how that last went.
+        public var wifiPhase = 0
     }
 
     public var fanPercent: Int { (fanStep + 1) * 5 }
@@ -184,6 +186,15 @@ public struct ConnectionTiming: Equatable, Sendable {
     public var knownUnit: Bool
 }
 
+/// What a BedJet 3 found when asked to check for newer firmware.
+public enum FirmwareUpdate: Equatable, Sendable {
+    case upToDate
+    /// Newer firmware was found. The unit installs it and restarts.
+    case installing
+    /// The unit came back from restarting with this firmware, newer than it had.
+    case updated(String)
+}
+
 public enum BedJetError: LocalizedError, Equatable {
     case notConnected
     case inUseElsewhere
@@ -193,6 +204,9 @@ public enum BedJetError: LocalizedError, Equatable {
     case clockNotSet
     case programTooLong
     case invalidProgram(String)
+    case invalidWiFi(String)
+    /// The unit's Wi-Fi ended with this result, one of `Codec.WiFiPhase`.
+    case wifi(Int)
 
     public var errorDescription: String? {
         switch self {
@@ -203,7 +217,34 @@ public enum BedJetError: LocalizedError, Equatable {
         case .verifyFailed: return "The schedule didn't save correctly. Try again."
         case .clockNotSet: return "Your BedJet's clock wasn't set, so it didn't start the schedule. Try again."
         case .programTooLong: return "Your BedJet won't run a phase this long. Shorten the Heat phases or use Gentle heat."
-        case .invalidProgram(let why): return why
+        case .invalidProgram(let why), .invalidWiFi(let why): return why
+        case .wifi(let result): return Self.describe(wifi: result)
+        }
+    }
+
+    /// For a BedJet V2, which has no Wi-Fi.
+    public static let noWiFi = "Only a BedJet 3 has Wi-Fi. A BedJet V2's firmware can't be updated from a phone."
+    /// For a BedJet 3 without the characteristics that take Wi-Fi details.
+    public static let noWiFiSetup = "This BedJet doesn't take Wi-Fi details from a phone."
+
+    private static func describe(wifi result: Int) -> String {
+        switch result {
+        case Codec.WiFiPhase.noNetwork:
+            return "Your BedJet doesn't have a Wi-Fi network yet. Set up Wi-Fi first."
+        case Codec.WiFiPhase.cannotJoin:
+            return "Your BedJet couldn't join the Wi-Fi network. Check the password, and that it's a 2.4 GHz network: BedJet 3 can't use 5 GHz."
+        case Codec.WiFiPhase.noAddress:
+            return "Your BedJet found the Wi-Fi network, but the router didn't give it an address. Try again, or restart the router."
+        case Codec.WiFiPhase.noServer:
+            return "Your BedJet is on Wi-Fi but couldn't reach BedJet's update server. Check that the network is online, then try again."
+        case Codec.WiFiPhase.testFailed:
+            return "Your BedJet's Wi-Fi connection test failed. Try again."
+        case Codec.WiFiPhase.radioOff:
+            return "Your BedJet's Wi-Fi radio is off. Unplug the BedJet for 10 seconds, then try again."
+        case Codec.WiFiPhase.updateFailed:
+            return "The firmware update failed. Try again later."
+        default:
+            return "Your BedJet's Wi-Fi reported a problem (code \(result)). Try again."
         }
     }
 }

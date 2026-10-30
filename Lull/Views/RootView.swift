@@ -100,6 +100,10 @@ private struct Announcements: View {
             .onChange(of: bedJet.run?.schedule.name) { old, name in
                 if let name { announce("Started \(name)") } else if old != nil { announce("Night ended") }
             }
+            // Joining Wi-Fi or checking for firmware takes a while, so how it went is said when it's over.
+            .onChange(of: bedJet.wifiActivity?.outcome) { _, outcome in
+                if let outcome { announce(outcome) }
+            }
     }
 
 }

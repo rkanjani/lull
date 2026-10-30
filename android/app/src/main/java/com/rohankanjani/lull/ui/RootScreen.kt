@@ -243,6 +243,14 @@ private fun Announcements(bedJet: BedJet) {
         if (old == running) return@LaunchedEffect
         if (running != null) announce("Started $running") else if (old != null) announce("Night ended")
     }
+    // Joining Wi-Fi or checking for firmware takes a while, so how it went is said when it's over.
+    val outcome = bedJet.wifiActivity?.outcome
+    var lastOutcome by remember { mutableStateOf(outcome) }
+    LaunchedEffect(outcome) {
+        val old = lastOutcome
+        lastOutcome = outcome
+        if (outcome != null && outcome != old) announce(outcome)
+    }
 }
 
 /** Screen scaffold shared by the tabs: large title on the left, the BedJet on screen and its connection on the right. */

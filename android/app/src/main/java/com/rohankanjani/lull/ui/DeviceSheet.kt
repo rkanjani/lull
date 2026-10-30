@@ -1,5 +1,11 @@
 package com.rohankanjani.lull.ui
 
+import android.Manifest
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -27,9 +33,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowCircleDown
 import androidx.compose.material.icons.filled.Bed
 import androidx.compose.material.icons.filled.BluetoothDisabled
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Power
@@ -37,6 +45,9 @@ import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material.icons.filled.SignalCellularAlt1Bar
 import androidx.compose.material.icons.filled.SignalCellularAlt2Bar
 import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -54,17 +65,21 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -77,11 +92,17 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.rohankanjani.lull.AppModel
 import com.rohankanjani.lull.BedJet
+import com.rohankanjani.lull.WiFiActivity
+import com.rohankanjani.lull.WiFiNetworks
+import com.rohankanjani.lull.bedjetkit.Codec
 import com.rohankanjani.lull.bedjetkit.Generation
 import com.rohankanjani.lull.bedjetkit.LinkState
 import com.rohankanjani.lull.bedjetkit.NearbyBedJet
@@ -91,16 +112,21 @@ import kotlinx.coroutines.launch
 @Composable
 fun DeviceSheet(model: AppModel, bedJet: BedJet, onDismiss: () -> Unit) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    // The BedJets nearby open over the settings, as a screen pushed onto them.
+    // The BedJets nearby and the Wi-Fi network open over the settings, as screens pushed onto them.
     var showsNearby by rememberSaveable { mutableStateOf(false) }
+    var showsWiFi by rememberSaveable { mutableStateOf(false) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = Theme.background, dragHandle = null) {
         if (showsNearby) {
             SheetPage("Add a BedJet", back = { showsNearby = false }) {
                 NearbyBedJets(model) { showsNearby = false }
             }
+        } else if (showsWiFi) {
+            SheetPage("Wi-Fi", back = { showsWiFi = false }) {
+                WiFiSetup(model, bedJet)
+            }
         } else {
             SheetPage(if (model.hasSeveralBedJets) "BedJets" else "BedJet", done = onDismiss) {
-                DeviceSettings(model, bedJet, showNearby = { showsNearby = true }, dismiss = onDismiss)
+                DeviceSettings(model, bedJet, showNearby = { showsNearby = true }, showWiFi = { showsWiFi = true }, dismiss = onDismiss)
             }
         }
     }
@@ -151,9 +177,10 @@ private fun SheetPage(
 }
 
 @Composable
-private fun DeviceSettings(model: AppModel, bedJet: BedJet, showNearby: () -> Unit, dismiss: () -> Unit) {
+private fun DeviceSettings(model: AppModel, bedJet: BedJet, showNearby: () -> Unit, showWiFi: () -> Unit, dismiss: () -> Unit) {
     val title = model.title(bedJet)
-    val statusText = when (bedJet.linkState) {
+    // Restarting to check for firmware drops the connection for a few seconds; it's expected, not lost.
+    val statusText = if (bedJet.isRestarting) "Restarting…" else when (bedJet.linkState) {
         LinkState.READY -> if (model.demoMode) "Demo BedJet" else "Connected"
         LinkState.CONNECTING -> "Connecting…"
         LinkState.SEARCHING -> if (bedJet.isSlowToFind) "Not found" else "Searching…"
@@ -161,7 +188,7 @@ private fun DeviceSettings(model: AppModel, bedJet: BedJet, showNearby: () -> Un
         LinkState.BLUETOOTH_OFF -> "Bluetooth is off"
         LinkState.UNAUTHORIZED -> "Bluetooth not allowed"
     }
-    val help = when (bedJet.linkState) {
+    val help = when (if (bedJet.isRestarting) LinkState.READY else bedJet.linkState) {
         LinkState.READY -> if (model.demoMode) "Demo mode uses a pretend BedJet so you can explore the app."
         else "Everything stays between this phone and your BedJet. No account, no cloud."
         LinkState.CONNECTING, LinkState.SEARCHING ->
@@ -197,11 +224,12 @@ private fun DeviceSettings(model: AppModel, bedJet: BedJet, showNearby: () -> Un
         }
     }
 
-    val extra = bedJet.status?.extra
-    if (bedJet.isConnected && extra != null) {
+    val extra = bedJet.settings
+    // Kept, but off, while the BedJet restarts to check for firmware, so the sheet doesn't jump about.
+    if ((bedJet.isConnected || bedJet.isRestarting) && extra != null) {
         Section(header = "BedJet") {
-            Toggle("Light ring", extra.ledEnabled) { on -> model.scope.launch { bedJet.setLED(on) } }
-            Toggle("Mute beeps", extra.beepsMuted) { muted -> model.scope.launch { bedJet.setMuted(muted) } }
+            Toggle("Light ring", extra.ledEnabled, enabled = bedJet.isConnected) { on -> model.scope.launch { bedJet.setLED(on) } }
+            Toggle("Mute beeps", extra.beepsMuted, enabled = bedJet.isConnected) { muted -> model.scope.launch { bedJet.setMuted(muted) } }
         }
     }
 
@@ -218,6 +246,12 @@ private fun DeviceSettings(model: AppModel, bedJet: BedJet, showNearby: () -> Un
         }
     }
 
+    // A BedJet V2's firmware can't be updated from a phone.
+    if (bedJet.knownGeneration == Generation.V3) {
+        FirmwareSection(model, bedJet)
+        WiFiSection(bedJet, showWiFi)
+    }
+
     if (!model.hasSeveralBedJets) {
         Section(footer = "Have a BedJet on each side of the bed? Add both, then switch between them from the top of any screen.") {
             NavigationRow(Icons.Filled.Add, "Add Another BedJet", enabled = model.canSwitch, onClick = showNearby)
@@ -225,18 +259,10 @@ private fun DeviceSettings(model: AppModel, bedJet: BedJet, showNearby: () -> Un
     }
 
     Section(footer = "The BedJet keeps running as it is, and its history stays on this phone in case you choose it again.") {
-        Text(
-            "Forget This BedJet",
-            fontSize = 17.sp,
-            color = Theme.red,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(role = Role.Button) {
-                    dismiss()
-                    model.forget(bedJet)
-                }
-                .padding(vertical = 13.dp),
-        )
+        ButtonRow("Forget This BedJet", enabled = true, color = Theme.red, divider = false) {
+            dismiss()
+            model.forget(bedJet)
+        }
     }
 
     Section(header = "App") {
@@ -269,30 +295,272 @@ private fun DeviceSettings(model: AppModel, bedJet: BedJet, showNearby: () -> Un
 /** Kept on this phone only; the BedJet's own name is left alone. */
 @Composable
 private fun NicknameField(bedJet: BedJet) {
+    TextRow("Nickname", bedJet.nickname.orEmpty(), example = "Such as My side", autoCorrect = true, imeAction = ImeAction.Done) {
+        bedJet.nickname = it.take(30).ifEmpty { null }
+    }
+}
+
+/** A BedJet 3 downloads its own firmware over Wi-Fi. Lull gives it a network and asks it to check. */
+@Composable
+private fun FirmwareSection(model: AppModel, bedJet: BedJet) {
+    var confirming by rememberSaveable { mutableStateOf(false) }
+    val footer = if (bedJet.updateWaitsForSchedule) {
+        "A schedule is running. Check once it has finished, since updating restarts your BedJet."
+    } else if (!bedJet.isConnected && !bedJet.isRestarting) {
+        "Lull checks for updates while it's connected to your BedJet."
+    } else {
+        "Your BedJet checks for updates itself, over Wi-Fi, and restarts to do it, which turns off the air for a few seconds. If there's a newer version, it installs it straight away."
+    }
+    Section(header = "Firmware", footer = footer) {
+        if (bedJet.updateAvailable) Tip(Icons.Filled.ArrowCircleDown, "Your BedJet says newer firmware is available.")
+        val activity = bedJet.wifiActivity?.takeIf { it.purpose == WiFiActivity.Purpose.UPDATING }
+        WiFiButton("Check for Update", activity, enabled = bedJet.canUpdateFirmware, divider = activity?.outcome != null) { confirming = true }
+        if (activity?.outcome != null) WiFiOutcomeRow(activity.outcome, activity.failed, divider = false)
+    }
+    if (confirming) {
+        AlertDialog(
+            onDismissRequest = { confirming = false },
+            title = { Text("Check for a firmware update?") },
+            text = {
+                Text("Your BedJet restarts to check, which turns off the air for a few seconds. If there's a newer version, it installs it straight away. Keep it plugged in until it's back.")
+            },
+            confirmButton = {
+                TextButton({
+                    confirming = false
+                    model.scope.launch { bedJet.updateFirmware() }
+                }) { Text("Check") }
+            },
+            dismissButton = { TextButton({ confirming = false }) { Text("Cancel") } },
+            containerColor = Theme.raised,
+        )
+    }
+}
+
+/** The network a BedJet 3 downloads its firmware over, and setting it. */
+@Composable
+private fun WiFiSection(bedJet: BedJet, showWiFi: () -> Unit) {
+    Section(header = "Wi-Fi", footer = "Your BedJet uses Wi-Fi only to download firmware updates.") {
+        NavigationRow(Icons.Filled.Wifi, "Network", enabled = true, value = bedJet.wifiNetwork, onClick = showWiFi)
+    }
+}
+
+/** A button that says what the BedJet is doing in place of its title while it's at what the button asked for. */
+@Composable
+private fun WiFiButton(text: String, activity: WiFiActivity?, enabled: Boolean, divider: Boolean, onClick: () -> Unit) {
+    if (activity == null || !activity.isRunning) {
+        ButtonRow(text, enabled, divider = divider, onClick = onClick)
+        return
+    }
+    Row(
+        Modifier.fillMaxWidth().clickable(enabled = false, role = Role.Button) {}.padding(vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        // The words say it's under way, so TalkBack reads just those.
+        CircularProgressIndicator(Modifier.size(18.dp).clearAndSetSemantics {}, color = Theme.green, strokeWidth = 2.dp)
+        Text(activity.step, fontSize = 17.sp, color = Theme.secondary)
+    }
+    if (divider) HorizontalDivider(color = Theme.hairline)
+}
+
+/** How joining Wi-Fi or checking for firmware went, below the button that asked. */
+@Composable
+private fun WiFiOutcomeRow(outcome: String, failed: Boolean, divider: Boolean = true) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics(mergeDescendants = true) {}.padding(vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Icon(
+            if (failed) Icons.Filled.Warning else Icons.Filled.CheckCircle, null,
+            tint = if (failed) Theme.warm else Theme.green, modifier = Modifier.size(22.dp),
+        )
+        Text(outcome, fontSize = 17.sp)
+    }
+    if (divider) HorizontalDivider(color = Theme.hairline)
+}
+
+/**
+ * Gives a BedJet 3 the Wi-Fi network it fetches firmware over: one from the networks nearby, or any name, such as a
+ * hidden network's. Lull remembers the name it gave, never the password.
+ */
+@Composable
+private fun WiFiSetup(model: AppModel, bedJet: BedJet) {
+    val context = LocalContext.current
+    val networks = remember { WiFiNetworks(context) }
+    var allowed by remember { mutableStateOf(bedJet.isDemo || networks.allowed) }
+    var approximate by remember { mutableStateOf(!bedJet.isDemo && networks.approximate) }
+    var asked by rememberSaveable { mutableStateOf(false) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        allowed = granted[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        approximate = networks.approximate
+    }
+    LaunchedEffect(Unit) {
+        // Approximate location was already an answer to Lull's question, so it's sent to Settings, as on iOS.
+        if (!allowed && !approximate && !asked) {
+            asked = true
+            ask.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+        }
+    }
+    // Coming back from Settings may have allowed it.
+    LifecycleResumeEffect(Unit) {
+        allowed = bedJet.isDemo || networks.allowed
+        approximate = !bedJet.isDemo && networks.approximate
+        onPauseOrDispose {}
+    }
+    DisposableEffect(allowed) {
+        val stop = if (allowed && !bedJet.isDemo) networks.start() else ({})
+        onDispose { stop() }
+    }
+    val choices = if (bedJet.isDemo) WiFiNetworks.demo else networks.choices
+
+    // The network picked from the list; null while the name is typed in.
+    var picked by rememberSaveable { mutableStateOf<String?>(null) }
+    var typed by rememberSaveable { mutableStateOf(bedJet.wifiNetwork.orEmpty()) }
+    // Not saved with the screen's state, which can be written to disk.
+    var password by remember { mutableStateOf("") }
+    val current = choices.firstOrNull { it.current }?.name
+    LaunchedEffect(current) {
+        // Offer this phone's network, unless another name is already there.
+        if (current != null && picked == null && (typed.isEmpty() || typed == current)) {
+            picked = current
+            typed = ""
+        }
+    }
+    LaunchedEffect(choices) {
+        // A network a later scan no longer hears stays the one joined, typed in where it can be seen.
+        val gone = picked?.takeIf { name -> choices.none { it.name == name } } ?: return@LaunchedEffect
+        typed = gone
+        picked = null
+    }
+    val network = picked ?: typed
+    val problem = Codec.wifiProblem(network, password)
+    val activity = bedJet.wifiActivity?.takeIf { it.purpose == WiFiActivity.Purpose.JOINING }
+    val showsSettings = !allowed && (asked || approximate)
+
+    Section(
+        header = "Network",
+        footer = if (allowed) {
+            "BedJet 3 can only join 2.4 GHz networks, so only those are listed. For a hidden network, choose Other Network."
+        } else if (approximate) {
+            "To list the networks nearby, turn on Precise Location for Lull in Settings. Or choose " +
+                "Other Network: BedJet 3 can only join 2.4 GHz networks, not 5 GHz ones, whose names often end in “5G”."
+        } else {
+            "To list the networks nearby, allow location access for Lull in Settings. Lull uses it only here. Or choose " +
+                "Other Network: BedJet 3 can only join 2.4 GHz networks, not 5 GHz ones, whose names often end in “5G”."
+        },
+    ) {
+        choices.forEach { choice ->
+            NetworkRow(choice.name, detail = if (choice.current) "This phone's network" else null, picked = picked == choice.name) {
+                picked = choice.name
+            }
+        }
+        NetworkRow("Other Network…", picked = picked == null, divider = picked == null || showsSettings) { picked = null }
+        if (picked == null) {
+            TextRow("Name", typed, example = "Network name", imeAction = ImeAction.Next, divider = showsSettings) { typed = it }
+        }
+        if (showsSettings) {
+            ButtonRow("Open Settings", enabled = true, divider = false) {
+                context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)))
+            }
+        }
+    }
+    // The list above says which networks a BedJet 3 can join, so this only says what happens to the details.
+    Section(footer = "Lull hands the name and password to your BedJet, and remembers the name but never the password.") {
+        // Shown as typed, to check a long Wi-Fi password, and so the phone doesn't offer to save it for Lull.
+        TextRow("Password", password, keyboard = KeyboardType.Password, imeAction = ImeAction.Done, divider = false) { password = it }
+    }
+    Section(
+        footer = if (problem != null && (network.isNotEmpty() || password.isNotEmpty())) problem
+        else "Your BedJet tries the network straight away and says how it went.",
+    ) {
+        WiFiButton("Join Network", activity, enabled = bedJet.canJoinWiFi && problem == null, divider = activity?.outcome != null) {
+            model.scope.launch { bedJet.joinWiFi(network, password) }
+        }
+        if (activity?.outcome != null) WiFiOutcomeRow(activity.outcome, activity.failed, divider = false)
+    }
+}
+
+/** A Wi-Fi network to pick, ticked when it's the one picked. */
+@Composable
+private fun NetworkRow(name: String, detail: String? = null, picked: Boolean, divider: Boolean = true, pick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .selectable(selected = picked, role = Role.RadioButton, onClick = pick)
+            .clearAndSetSemantics {
+                contentDescription = if (detail != null) "$name, $detail" else name
+                selected = picked
+                role = Role.RadioButton
+                onClick { pick(); true }
+            }
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(name, fontSize = 17.sp)
+            if (detail != null) Text(detail, fontSize = 13.sp, color = Theme.secondary)
+        }
+        if (picked) Icon(Icons.Filled.Check, null, tint = Theme.green, modifier = Modifier.size(22.dp))
+    }
+    if (divider) HorizontalDivider(color = Theme.hairline)
+}
+
+/** A label with a field to type into, like a row in Settings. */
+@Composable
+private fun TextRow(
+    label: String,
+    value: String,
+    example: String? = null,
+    keyboard: KeyboardType = KeyboardType.Text,
+    autoCorrect: Boolean = false,
+    imeAction: ImeAction,
+    divider: Boolean = true,
+    onChange: (String) -> Unit,
+) {
     val focus = LocalFocusManager.current
     // The example would clip at the largest text sizes, where the field is narrow.
-    val example = if (isLargeText()) null else "Such as My side"
+    val shownExample = if (isLargeText()) null else example
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("Nickname", fontSize = 17.sp, modifier = Modifier.clearAndSetSemantics {})
+        Text(label, fontSize = 17.sp, modifier = Modifier.clearAndSetSemantics {})
         Spacer(Modifier.width(16.dp))
         BasicTextField(
-            value = bedJet.nickname.orEmpty(),
-            onValueChange = { bedJet.nickname = it.take(30).ifEmpty { null } },
+            value = value,
+            onValueChange = onChange,
             singleLine = true,
             textStyle = TextStyle(fontSize = 17.sp, color = Color.White, textAlign = TextAlign.End),
             cursorBrush = SolidColor(Theme.green),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
-            modifier = Modifier.weight(1f).semantics { contentDescription = "Nickname" },
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.None, autoCorrectEnabled = autoCorrect, keyboardType = keyboard, imeAction = imeAction,
+            ),
+            keyboardActions = KeyboardActions(onNext = { focus.moveFocus(FocusDirection.Down) }, onDone = { focus.clearFocus() }),
+            modifier = Modifier.weight(1f).semantics { contentDescription = label },
             decorationBox = { field ->
-                if (bedJet.nickname.isNullOrEmpty() && example != null) {
-                    Text(example, fontSize = 17.sp, color = Theme.tertiary, textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth())
+                if (value.isEmpty() && shownExample != null) {
+                    Text(shownExample, fontSize = 17.sp, color = Theme.tertiary, textAlign = TextAlign.End, modifier = Modifier.fillMaxWidth())
                 }
                 field()
             },
         )
     }
-    HorizontalDivider(color = Theme.hairline)
+    if (divider) HorizontalDivider(color = Theme.hairline)
+}
+
+/** A button that fills its row, like one in a Settings list. */
+@Composable
+private fun ButtonRow(text: String, enabled: Boolean, color: Color = Theme.green, divider: Boolean = true, onClick: () -> Unit) {
+    Text(
+        text,
+        fontSize = 17.sp,
+        color = color,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .alpha(if (enabled) 1f else 0.4f)
+            .padding(vertical = 13.dp),
+    )
+    if (divider) HorizontalDivider(color = Theme.hairline)
 }
 
 /** Every BedJet this phone knows, to switch between. Ticked is the one on screen; each says how it's connected. */
@@ -440,7 +708,7 @@ val Generation.title: String
     }
 
 @Composable
-private fun NavigationRow(icon: ImageVector, text: String, enabled: Boolean, onClick: () -> Unit) {
+private fun NavigationRow(icon: ImageVector, text: String, enabled: Boolean, value: String? = null, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -452,7 +720,8 @@ private fun NavigationRow(icon: ImageVector, text: String, enabled: Boolean, onC
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Icon(icon, null, tint = Theme.green, modifier = Modifier.size(22.dp))
-        Text(text, fontSize = 17.sp, color = Theme.green, modifier = Modifier.weight(1f))
+        Text(text, fontSize = 17.sp, color = if (value == null) Theme.green else Color.White, modifier = Modifier.weight(1f))
+        if (value != null) Text(value, fontSize = 17.sp, color = Theme.secondary, textAlign = TextAlign.End)
         Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Theme.tertiary, modifier = Modifier.size(22.dp))
     }
 }
@@ -508,14 +777,20 @@ private fun Labeled(label: String, value: String, spoken: String = value) {
 }
 
 @Composable
-private fun Toggle(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun Toggle(label: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, fontSize = 17.sp)
+        Text(label, fontSize = 17.sp, modifier = Modifier.alpha(if (enabled) 1f else 0.4f))
         Switch(
             checked, onChange,
+            enabled = enabled,
             colors = SwitchDefaults.colors(
                 checkedTrackColor = Theme.green, checkedThumbColor = Color.White, checkedBorderColor = Theme.green,
                 uncheckedTrackColor = Theme.neutral.copy(alpha = 0.35f), uncheckedThumbColor = Color.White, uncheckedBorderColor = Color.Transparent,
+                // Dimmed but still reading on or off, like iOS, rather than Material's grey.
+                disabledCheckedTrackColor = Theme.green.copy(alpha = 0.4f), disabledCheckedThumbColor = Color.White.copy(alpha = 0.6f),
+                disabledCheckedBorderColor = Color.Transparent,
+                disabledUncheckedTrackColor = Theme.neutral.copy(alpha = 0.15f), disabledUncheckedThumbColor = Color.White.copy(alpha = 0.6f),
+                disabledUncheckedBorderColor = Color.Transparent,
             ),
         )
     }

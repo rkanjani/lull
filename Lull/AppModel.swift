@@ -169,7 +169,8 @@ final class AppModel {
         if let makesLink { return makesLink(bedJet) }
         guard bedJet.isDemo else { return BLELink(unit: bedJet.unit) }
         let demo = DemoLink(name: bedJet.name ?? DemoLink.defaultName,
-                            slots: [StoredProgram(name: "Summer nights", steps: Schedule.templates[2].program.steps), nil, nil])
+                            slots: [StoredProgram(name: "Summer nights", steps: Schedule.templates[2].program.steps), nil, nil],
+                            wifiNetwork: bedJet.wifiNetwork)
         demo.answers = !(Self.demoFirstUnitAway && bedJet.unit == DemoDiscovery.simulated[0].id)
         return demo
     }

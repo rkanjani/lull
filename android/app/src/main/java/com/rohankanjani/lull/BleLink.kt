@@ -127,6 +127,8 @@ class BleLink(
         private val SERVICE: UUID = uuid("1000")
         private val STATUS: UUID = uuid("2000")
         private val NAME: UUID = uuid("2001")
+        private val WIFI_NETWORK: UUID = uuid("2002")
+        private val WIFI_PASSWORD: UUID = uuid("2003")
         private val COMMAND: UUID = uuid("2004")
         private val REPLY: UUID = uuid("2006")
         private val UART_SERVICE: UUID = UUID.fromString("49535343-FE7D-4AE5-8FA9-9FAFD205E455")
@@ -160,6 +162,9 @@ class BleLink(
     private var gatt: BluetoothGatt? = null
     private var command: BluetoothGattCharacteristic? = null
     private var reply: BluetoothGattCharacteristic? = null
+    /** Written only. It says it can be read, but a BedJet 3 never answers, which stalls every request after it. */
+    private var wifiNetwork: BluetoothGattCharacteristic? = null
+    private var wifiPassword: BluetoothGattCharacteristic? = null
     private var statusCharacteristic: BluetoothGattCharacteristic? = null
     private var wantsConnection = false
     private var yieldedUntil = 0L
@@ -253,6 +258,16 @@ class BleLink(
 
     override suspend fun send(command: ByteArray) {
         serial.withLock { write(command) }
+    }
+
+    override suspend fun writeWiFi(network: ByteArray, password: ByteArray) {
+        serial.withLock {
+            if (state != LinkState.READY) throw BedJetError.NotConnected
+            val networkCharacteristic = wifiNetwork ?: throw BedJetError.InvalidWiFi(BedJetError.NO_WIFI_SETUP)
+            val passwordCharacteristic = wifiPassword ?: throw BedJetError.InvalidWiFi(BedJetError.NO_WIFI_SETUP)
+            write(network, networkCharacteristic)
+            write(password, passwordCharacteristic)
+        }
     }
 
     override suspend fun query(request: Int): ByteArray {
@@ -386,6 +401,8 @@ class BleLink(
         gatt = null
         command = null
         reply = null
+        wifiNetwork = null
+        wifiPassword = null
         statusCharacteristic = null
         lastHead = null
         lastExtra = null
@@ -534,8 +551,9 @@ class BleLink(
         runNext()
     }
 
-    private suspend fun write(data: ByteArray) {
-        val characteristic = command
+    /** Writes to the command characteristic unless told another. */
+    private suspend fun write(data: ByteArray, target: BluetoothGattCharacteristic? = null) {
+        val characteristic = target ?: command
         if (state != LinkState.READY || characteristic == null) throw BedJetError.NotConnected
         val done = CompletableDeferred<Int>()
         val operation = Operation(begin = { it.write(characteristic, data) }, finish = { _, status -> done.complete(status) })
@@ -578,16 +596,26 @@ class BleLink(
         }
     }
 
-    private fun BluetoothGatt.write(characteristic: BluetoothGattCharacteristic, data: ByteArray): Boolean =
-        if (Build.VERSION.SDK_INT >= 33) {
-            writeCharacteristic(characteristic, data, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothGatt.GATT_SUCCESS
+    private fun BluetoothGatt.write(characteristic: BluetoothGattCharacteristic, data: ByteArray): Boolean {
+        // Writes are acknowledged, unless a characteristic only takes them without.
+        val properties = characteristic.properties
+        val type = if (properties and BluetoothGattCharacteristic.PROPERTY_WRITE == 0 &&
+            properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0
+        ) {
+            BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        } else {
+            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        }
+        return if (Build.VERSION.SDK_INT >= 33) {
+            writeCharacteristic(characteristic, data, type) == BluetoothGatt.GATT_SUCCESS
         } else {
             @Suppress("DEPRECATION")
             characteristic.value = data
-            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            characteristic.writeType = type
             @Suppress("DEPRECATION")
             writeCharacteristic(characteristic)
         }
+    }
 
     private fun BluetoothGatt.subscribe(characteristic: BluetoothGattCharacteristic): Boolean {
         setCharacteristicNotification(characteristic, true)
@@ -660,6 +688,8 @@ class BleLink(
             generation = Generation.V3
             command = bedJet.getCharacteristic(COMMAND)
             reply = bedJet.getCharacteristic(REPLY)
+            wifiNetwork = bedJet.getCharacteristic(WIFI_NETWORK)
+            wifiPassword = bedJet.getCharacteristic(WIFI_PASSWORD)
             statusCharacteristic = bedJet.getCharacteristic(STATUS)
         } else if (uart != null) {
             generation = Generation.V2

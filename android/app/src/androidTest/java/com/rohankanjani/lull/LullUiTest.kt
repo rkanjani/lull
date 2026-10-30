@@ -20,6 +20,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -314,6 +315,43 @@ class LullUiTest {
         compose.onNode(hasContentDescription("BedJet,", substring = true)).performClick()
         compose.waitFor(hasText("SAVED ON THE BEDJET"), timeoutMillis = 10_000)
         compose.capture("device")
+    }
+
+    @Test
+    fun wifiAndFirmwareCheck() {
+        compose.waitFor(hasText("Heat"), timeoutMillis = 10_000)
+        Thread.sleep(2000)
+        compose.onNode(hasContentDescription("BedJet,", substring = true)).performClick()
+        compose.waitFor(hasText("Network"), timeoutMillis = 10_000)
+        compose.onNodeWithText("Network").performScrollTo().performClick()
+
+        // A demo BedJet's phone is on a pretend network, offered first, and the simulated BedJet joins any network,
+        // testing it one step a second.
+        compose.waitFor(hasContentDescription("Home, This phone's network"))
+        compose.onNode(hasContentDescription("Home, This phone's network")).assertIsSelected()
+        compose.onNode(hasContentDescription("Password")).performTextInput("12345678")
+        compose.onNodeWithText("Join Network").performClick()
+        // What the BedJet is doing takes the button's title, and how it went goes below once the title is back.
+        compose.waitUntilGone(hasText("Join Network"))
+        compose.waitFor(hasText("Your BedJet joined “Home” and can now check for firmware updates."), timeoutMillis = 15_000)
+        compose.onNodeWithText("Join Network").assertExists()
+        compose.capture("wifi")
+
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitFor(hasText("Home"))
+        compose.onNodeWithText("Check for Update").performScrollTo().performClick()
+        compose.waitFor(hasText("Check for a firmware update?"))
+        compose.capture("firmware-confirm")
+        compose.onNodeWithText("Check").performClick()
+        // Like a real BedJet 3, the simulated one restarts to check, and the sheet says so rather than losing it.
+        compose.waitFor(hasText("Restarting your BedJet to check…"), timeoutMillis = 10_000)
+        compose.onNodeWithText("Check for Update").assertDoesNotExist()
+        compose.capture("firmware-restarting")
+        compose.waitFor(hasText("Your BedJet's firmware is up to date."), timeoutMillis = 15_000)
+        compose.onNodeWithText("Check for Update").assertExists()
+        // Going back shows the sheet from the top, so bring the result, and the Wi-Fi network below it, into view.
+        compose.onNodeWithText("Network").performScrollTo()
+        compose.capture("firmware")
     }
 }
 

@@ -35,6 +35,8 @@ public final class BLELink: NSObject, BedJetLink {
     private static let service = uuid("1000")
     private static let statusUUID = uuid("2000")
     private static let nameUUID = uuid("2001")
+    private static let wifiNetworkUUID = uuid("2002")
+    private static let wifiPasswordUUID = uuid("2003")
     private static let commandUUID = uuid("2004")
     private static let replyUUID = uuid("2006")
     private static let uartService = CBUUID(string: "49535343-FE7D-4AE5-8FA9-9FAFD205E455")
@@ -56,6 +58,9 @@ public final class BLELink: NSObject, BedJetLink {
     private var peripheral: CBPeripheral?
     private var command: CBCharacteristic?
     private var reply: CBCharacteristic?
+    /// Written only. It says it can be read, but a BedJet 3 never answers, which stalls every request after it.
+    private var wifiNetwork: CBCharacteristic?
+    private var wifiPassword: CBCharacteristic?
     private var wantsConnection = false
     private var yieldedUntil = Date.distantPast
     private var requestGeneration = 0
@@ -167,6 +172,17 @@ public final class BLELink: NSObject, BedJetLink {
         try await serially { try await self.write(data) }
     }
 
+    public func writeWiFi(network: Data, password: Data) async throws {
+        try await serially {
+            guard self.state == .ready else { throw BedJetError.notConnected }
+            guard let networkCharacteristic = self.wifiNetwork, let passwordCharacteristic = self.wifiPassword else {
+                throw BedJetError.invalidWiFi(BedJetError.noWiFiSetup)
+            }
+            try await self.write(network, to: networkCharacteristic)
+            try await self.write(password, to: passwordCharacteristic)
+        }
+    }
+
     public func query(_ request: UInt8) async throws -> Data {
         if generation == .v2 {
             return try await serially {
@@ -242,6 +258,8 @@ public final class BLELink: NSObject, BedJetLink {
         peripheral = nil
         command = nil
         reply = nil
+        wifiNetwork = nil
+        wifiPassword = nil
         statusCharacteristic = nil
         lastHead = nil
         lastExtra = nil
@@ -338,11 +356,17 @@ public final class BLELink: NSObject, BedJetLink {
         return try await task.value
     }
 
-    private func write(_ data: Data) async throws {
-        guard state == .ready, let peripheral, let command else { throw BedJetError.notConnected }
+    /// Writes to the command characteristic unless told another.
+    private func write(_ data: Data, to target: CBCharacteristic? = nil) async throws {
+        guard state == .ready, let peripheral, let characteristic = target ?? command else { throw BedJetError.notConnected }
+        // Writes are acknowledged, unless a characteristic only takes them without, which can't be waited for.
+        guard characteristic.properties.contains(.write) || !characteristic.properties.contains(.writeWithoutResponse) else {
+            peripheral.writeValue(data, for: characteristic, type: .withoutResponse)
+            return
+        }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             pendingWrite = continuation
-            peripheral.writeValue(data, for: command, type: .withResponse)
+            peripheral.writeValue(data, for: characteristic, type: .withResponse)
             expire { if let pending = $0.pendingWrite { $0.pendingWrite = nil; pending.resume(throwing: BedJetError.timeout) } }
         }
     }
@@ -495,7 +519,8 @@ extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate {
             servicesAfter = askedAt.map { Date().timeIntervalSince($0) } ?? 0
             if let service = services.first(where: { $0.uuid == Self.service }) {
                 generation = .v3
-                peripheral.discoverCharacteristics([Self.statusUUID, Self.nameUUID, Self.commandUUID, Self.replyUUID], for: service)
+                peripheral.discoverCharacteristics([Self.statusUUID, Self.nameUUID, Self.commandUUID, Self.replyUUID,
+                                                    Self.wifiNetworkUUID, Self.wifiPasswordUUID], for: service)
             } else if let service = services.first(where: { $0.uuid == Self.uartService }) {
                 generation = .v2
                 peripheral.discoverCharacteristics([Self.uartNotifyUUID, Self.uartWriteUUID], for: service)
@@ -515,6 +540,8 @@ extension BLELink: CBCentralManagerDelegate, CBPeripheralDelegate {
                 case Self.nameUUID: peripheral.readValue(for: characteristic)
                 case Self.commandUUID, Self.uartWriteUUID: command = characteristic
                 case Self.replyUUID: reply = characteristic
+                case Self.wifiNetworkUUID: wifiNetwork = characteristic
+                case Self.wifiPasswordUUID: wifiPassword = characteristic
                 case Self.uartNotifyUUID:
                     statusCharacteristic = characteristic
                     peripheral.setNotifyValue(true, for: characteristic)

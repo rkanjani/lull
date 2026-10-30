@@ -143,6 +143,8 @@ data class DeviceStatus(
         val programStep: Int,
         /** One of [Codec.Notification]. The unit repeats it until it is acknowledged. */
         val notification: Int,
+        /** One of [Codec.WiFiPhase]: how far a BedJet 3 is in joining Wi-Fi or checking for firmware, or how that last went. */
+        val wifiPhase: Int = 0,
     )
 
     val fanPercent: Int get() = (fanStep + 1) * 5
@@ -173,6 +175,15 @@ data class ConnectionTiming(
     val knownUnit: Boolean,
 )
 
+/** What a BedJet 3 found when asked to check for newer firmware. */
+sealed class FirmwareUpdate {
+    data object UpToDate : FirmwareUpdate()
+    /** Newer firmware was found. The unit installs it and restarts. */
+    data object Installing : FirmwareUpdate()
+    /** The unit came back from restarting with this firmware, newer than it had. */
+    data class Updated(val version: String) : FirmwareUpdate()
+}
+
 sealed class BedJetError(message: String) : Exception(message) {
     data object NotConnected : BedJetError("Couldn't reach your BedJet. Check that it's plugged in and nearby.")
     data object InUseElsewhere : BedJetError("Another phone is using your BedJet right now. Try again in a moment.")
@@ -182,6 +193,34 @@ sealed class BedJetError(message: String) : Exception(message) {
     data object ClockNotSet : BedJetError("Your BedJet's clock wasn't set, so it didn't start the schedule. Try again.")
     data object ProgramTooLong : BedJetError("Your BedJet won't run a phase this long. Shorten the Heat phases or use Gentle heat.")
     data class InvalidProgram(val why: String) : BedJetError(why)
+    data class InvalidWiFi(val why: String) : BedJetError(why)
+    /** The unit's Wi-Fi ended with this result, one of [Codec.WiFiPhase]. */
+    data class WiFi(val result: Int) : BedJetError(describe(result))
+
+    companion object {
+        /** For a BedJet V2, which has no Wi-Fi. */
+        const val NO_WIFI = "Only a BedJet 3 has Wi-Fi. A BedJet V2's firmware can't be updated from a phone."
+        /** For a BedJet 3 without the characteristics that take Wi-Fi details. */
+        const val NO_WIFI_SETUP = "This BedJet doesn't take Wi-Fi details from a phone."
+
+        private fun describe(result: Int): String = when (result) {
+            Codec.WiFiPhase.NO_NETWORK ->
+                "Your BedJet doesn't have a Wi-Fi network yet. Set up Wi-Fi first."
+            Codec.WiFiPhase.CANNOT_JOIN ->
+                "Your BedJet couldn't join the Wi-Fi network. Check the password, and that it's a 2.4 GHz network: BedJet 3 can't use 5 GHz."
+            Codec.WiFiPhase.NO_ADDRESS ->
+                "Your BedJet found the Wi-Fi network, but the router didn't give it an address. Try again, or restart the router."
+            Codec.WiFiPhase.NO_SERVER ->
+                "Your BedJet is on Wi-Fi but couldn't reach BedJet's update server. Check that the network is online, then try again."
+            Codec.WiFiPhase.TEST_FAILED ->
+                "Your BedJet's Wi-Fi connection test failed. Try again."
+            Codec.WiFiPhase.RADIO_OFF ->
+                "Your BedJet's Wi-Fi radio is off. Unplug the BedJet for 10 seconds, then try again."
+            Codec.WiFiPhase.UPDATE_FAILED ->
+                "The firmware update failed. Try again later."
+            else -> "Your BedJet's Wi-Fi reported a problem (code $result). Try again."
+        }
+    }
 }
 
 object Limits {

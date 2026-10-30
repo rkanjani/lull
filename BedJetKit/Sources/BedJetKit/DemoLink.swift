@@ -17,7 +17,9 @@ public final class DemoLink: BedJetLink {
     public var answers = true
     public private(set) var slots: [StoredProgram?]
     public private(set) var clock: (hour: Int, minute: Int)?
-    public var lastStatus: DeviceStatus? { state == .ready ? status : nil }
+    /// The Wi-Fi network the unit was given, which it needs to check for firmware.
+    public private(set) var wifiNetwork: String?
+    public var lastStatus: DeviceStatus? { state == .ready ? reported : nil }
     /// The step of the program running on the unit, connected or not; 0 when none is.
     public var programStep: Int { status.extra?.programStep ?? 0 }
 
@@ -28,11 +30,23 @@ public final class DemoLink: BedJetLink {
     )
     private var running: (slot: Int, step: Int, stepEnds: Date)?
     private var pendingSteps: [Int: [ProgramStep]] = [:]
+    /// The Wi-Fi phases still to report, one a second, like a unit joining a network or checking for firmware.
+    private var wifiSteps: [Int] = []
+    /// Seconds left before the unit is back from restarting, as it does when asked to check for firmware.
+    private var restarting = 0
+    /// Back from restarting, the unit's first report comes without its second half, as a real one's does.
+    private var firstHalfOnly = false
+    private var reported: DeviceStatus {
+        var report = status
+        if firstHalfOnly { report.extra = nil }
+        return report
+    }
     private var timer: Timer?
 
-    public init(name: String = DemoLink.defaultName, slots: [StoredProgram?] = [nil, nil, nil]) {
+    public init(name: String = DemoLink.defaultName, slots: [StoredProgram?] = [nil, nil, nil], wifiNetwork: String? = nil) {
         self.name = name
         self.slots = slots
+        self.wifiNetwork = wifiNetwork
     }
 
     public func start() {
@@ -66,7 +80,14 @@ public final class DemoLink: BedJetLink {
         case 0x40: store(bytes)
         default: break
         }
-        onStatus?(status)
+        // A unit that is restarting says nothing until it's back.
+        if restarting == 0 { onStatus?(reported) }
+    }
+
+    /// Pretends the network works whatever the password, then reports its firmware as current when asked to check.
+    public func writeWiFi(network: Data, password: Data) async throws {
+        wifiNetwork = String(decoding: network, as: UTF8.self)
+        wifiSteps = [Codec.WiFiPhase.starting, Codec.WiFiPhase.joining, Codec.WiFiPhase.joined, Codec.WiFiPhase.testing, Codec.WiFiPhase.works]
     }
 
     public func query(_ request: UInt8) async throws -> Data {
@@ -109,6 +130,15 @@ public final class DemoLink: BedJetLink {
         case 0x46, 0x47: status.extra?.ledEnabled = button == 0x46
         case 0x48, 0x49: status.extra?.beepsMuted = button == 0x48
         case 0x52: status.extra?.notification = 0
+        case 0x43:
+            // Like the real unit, restart, which turns off the air and drops the connection for a few seconds, and
+            // check while away, so the result is there when it's back.
+            running = nil
+            status.extra?.programStep = 0
+            enter(.standby, minutes: 0)
+            restarting = 2
+            state = .connecting
+            wifiSteps = [wifiNetwork == nil ? Codec.WiFiPhase.noNetwork : Codec.WiFiPhase.upToDate]
         case 0x80...0x82:
             let slot = Int(button - 0x80)
             guard let program = slots[slot] else { return }
@@ -202,7 +232,15 @@ public final class DemoLink: BedJetLink {
     }
 
     private func tick() {
+        if restarting > 0 {
+            restarting -= 1
+            if restarting > 0 { return }
+            firstHalfOnly = true
+        } else {
+            firstHalfOnly = false
+        }
         if state == .connecting { state = .ready }
+        if !wifiSteps.isEmpty { status.extra?.wifiPhase = wifiSteps.removeFirst() }
         if let run = running, Date() >= run.stepEnds { advanceProgram(from: run.stepEnds) }
         if status.mode != .standby, status.mode != .wait {
             status.remainingSeconds = max(0, status.remainingSeconds - 1)
@@ -210,6 +248,6 @@ public final class DemoLink: BedJetLink {
         }
         let goal = status.mode == .standby || status.mode == .wait ? status.ambientTemperature : status.targetTemperature
         status.actualTemperature += (goal - status.actualTemperature).signum()
-        onStatus?(status)
+        onStatus?(reported)
     }
 }

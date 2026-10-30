@@ -20,12 +20,17 @@ public protocol BedJetLink: AnyObject {
     func send(_ command: Data) async throws
     /// Asks the unit for stored data and returns the reply payload.
     func query(_ request: UInt8) async throws -> Data
+    /// Gives a BedJet 3 the Wi-Fi network it fetches firmware over: the name, then the password, which starts a
+    /// connection test.
+    func writeWiFi(network: Data, password: Data) async throws
 }
 
 extension BedJetLink {
     public var generation: Generation { .v3 }
 
     public func requestControl() {}
+
+    public func writeWiFi(network: Data, password: Data) async throws { throw BedJetError.invalidWiFi(BedJetError.noWiFiSetup) }
 
     // MARK: Remote
 
@@ -126,6 +131,107 @@ extension BedJetLink {
         return info
     }
 
+    // MARK: Wi-Fi and firmware
+
+    /// Gives a BedJet 3 the Wi-Fi network it fetches firmware over, then follows the unit's test of it.
+    /// `progress` hears each `Codec.WiFiPhase` step. Throws the unit's result unless it joined.
+    public func joinWiFi(network: String, password: String, progress: (Int) -> Void = { _ in }) async throws {
+        guard generation == .v3 else { throw BedJetError.invalidWiFi(BedJetError.noWiFi) }
+        if let problem = Codec.wifiProblem(network: network, password: password) { throw BedJetError.invalidWiFi(problem) }
+        let shown = lastStatus?.extra?.wifiPhase
+        try await writeWiFi(network: Data(network.utf8), password: Data(password.utf8))
+        let result = try await wifiResult(after: shown, restarts: false, progress: progress)
+        guard result == Codec.WiFiPhase.works else {
+            // It has a network now, so "no network" is only the old result still showing.
+            throw result == Codec.WiFiPhase.noNetwork ? BedJetError.timeout : BedJetError.wifi(result)
+        }
+    }
+
+    /// Asks a BedJet 3 to check BedJet's server for newer firmware, over its Wi-Fi. The unit can't only check:
+    /// newer firmware is installed straight away, and the unit restarts, which drops the connection.
+    public func updateFirmware(progress: (Int) -> Void = { _ in }) async throws -> FirmwareUpdate {
+        guard generation == .v3 else { throw BedJetError.invalidWiFi(BedJetError.noWiFi) }
+        let before = try? await firmwareVersion()
+        let shown = lastStatus?.extra?.wifiPhase
+        try await send(Codec.updateFirmware)
+        switch try await wifiResult(after: shown, restarts: true, progress: progress) {
+        case Codec.WiFiPhase.upToDate:
+            // The unit checks, and installs, while it's restarting, so newer firmware may already be running.
+            if let before, let after = try? await firmwareVersion(), after != before { return .updated(after) }
+            return .upToDate
+        case Codec.WiFiPhase.installing:
+            // About to restart into the new firmware, so asking its version now would only wait out the restart.
+            return .installing
+        case let result:
+            throw BedJetError.wifi(result)
+        }
+    }
+
+    /// Follows the unit's Wi-Fi phase until it gives a result. The result of its last attempt stays in the status
+    /// until it starts again, so a result only counts once the unit has moved on from the one `shown` when asked.
+    ///
+    /// Asked to check for firmware, a BedJet 3 restarts within a few seconds and does the whole check while it's
+    /// away, so the result is there as soon as it's back (captured: 01 43 acknowledged, link lost 4 s later, back
+    /// within a second reporting No update needed). The official app waits for it to reconnect too. The link comes
+    /// back by itself, so a dropped link is waited out, except once the unit is installing: then the restart is
+    /// the end, and it comes back with the new firmware, so the result is `installing`.
+    ///
+    /// Only a firmware check `restarts` the unit. Any other dropped link is just Bluetooth, and the result the
+    /// unit shows once it's back may still be the one from before.
+    private func wifiResult(after shown: Int?, restarts: Bool, progress: (Int) -> Void) async throws -> Int {
+        var working = false
+        var installing = false
+        var restarted = false
+        var last: Int?
+        // Polled every 200 ms: 20 seconds to start, 10 minutes in all, which also bounds a restart. A link lost
+        // for 20 seconds when nothing restarted the unit is lost, not waited for.
+        var waited = 0
+        var away = 0
+        for _ in 0..<3000 {
+            if state != .ready {
+                if installing { return Codec.WiFiPhase.installing }
+                if !restarts, away == 100 { throw BedJetError.notConnected }
+                if away == 0 {
+                    waited = 0
+                    if restarts {
+                        progress(Codec.WiFiPhase.restarting)
+                        restarted = true
+                        working = false
+                        last = nil
+                    }
+                }
+                away += 1
+                try await Task.sleep(nanoseconds: 200_000_000)
+                continue
+            }
+            away = 0
+            if let phase = lastStatus?.extra?.wifiPhase {
+                if !Codec.WiFiPhase.isResult(phase) {
+                    // Restarting once it's installing is still installing, not restarting to check.
+                    let restartsToInstall = installing && phase == Codec.WiFiPhase.restarting
+                    if phase != Codec.WiFiPhase.idle, phase != last, !restartsToInstall { progress(phase) }
+                    working = working || phase != Codec.WiFiPhase.idle
+                    installing = installing || phase == Codec.WiFiPhase.updating
+                } else if working || restarted || (shown != nil && phase != shown) {
+                    return phase
+                }
+                last = phase
+            }
+            waited += 1
+            if !working, waited == 100 {
+                // A quick check can come and go between status reports, so a failure still showing is the answer.
+                if let last, Codec.WiFiPhase.isResult(last), last != Codec.WiFiPhase.works, last != Codec.WiFiPhase.upToDate {
+                    return last
+                }
+                throw BedJetError.timeout
+            }
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+        // A slow download can outlast the wait.
+        if installing { return Codec.WiFiPhase.installing }
+        throw BedJetError.timeout
+    }
+
     // MARK: Programs
 
     /// Everything saved on the unit, one entry per slot; `nil` where the slot is empty.
@@ -183,7 +289,7 @@ extension BedJetLink {
         }
         let info = try await v2Info()
         guard info.runsSequences else {
-            throw BedJetError.invalidProgram("This BedJet V2 needs a firmware update before it can run schedules. Update it in the official BedJet app.")
+            throw BedJetError.invalidProgram("This BedJet V2's firmware is too old to run schedules, and neither BedJet app can update it. Ask BedJet support about an update.")
         }
         // Steps can only last a duration, so ones that end at a time of day are measured from now.
         let now = Calendar.current.dateComponents([.hour, .minute], from: Date())

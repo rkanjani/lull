@@ -32,6 +32,8 @@ class CodecTest {
         assertEquals(true, status.extra?.beepsMuted)
         assertEquals(0, status.lastShutdownReason)
         assertEquals(Codec.Notification.CLEAN_FILTER, status.extra?.notification)
+        // The result of an earlier connection test, kept until the unit next uses its Wi-Fi.
+        assertEquals(Codec.WiFiPhase.CANNOT_JOIN, status.extra?.wifiPhase)
     }
 
     @Test
@@ -203,4 +205,183 @@ class CodecTest {
         link.send(Codec.acknowledgeNotification)
         assertEquals(0, latest?.extra?.notification)
     }
+
+    // Wi-Fi and firmware
+
+    /** `MAGIC_UPDATE` in the official app. */
+    @Test
+    fun checkingForFirmwareIsTheOfficialAppsButton() {
+        assertArrayEquals(byteArrayOf(0x01, 0x43), Codec.updateFirmware)
+    }
+
+    @Test
+    fun wifiDetailsMustSuitTheUnit() {
+        assertNull(Codec.wifiProblem("Home", "12345678"))
+        assertNotNull(Codec.wifiProblem("", "12345678"))
+        assertNotNull(Codec.wifiProblem("n".repeat(33), "12345678"))
+        assertNotNull(Codec.wifiProblem("Home", "1234567"))
+        assertNotNull(Codec.wifiProblem("Home", "p".repeat(64)))
+    }
+
+    @Test
+    fun joiningWiFiSendsTheNameThenPasswordAndFollowsTheTest() = runTest {
+        val link = ScriptedWiFiLink(21, 1, 2, 3, 4, 24)
+        val steps = mutableListOf<Int>()
+        link.joinWiFi("Home", "correct horse") { steps += it }
+        assertArrayEquals("Home".encodeToByteArray(), link.wifi?.first)
+        assertArrayEquals("correct horse".encodeToByteArray(), link.wifi?.second)
+        assertEquals(listOf(1, 2, 3, 4), steps)
+    }
+
+    @Test
+    fun aFailedJoinCountsEvenWhenItRepeatsTheLastResult() = runTest {
+        val link = ScriptedWiFiLink(21, 21, 1, 2, 21)
+        try {
+            link.joinWiFi("Home", "wrong password")
+            fail("joined")
+        } catch (error: BedJetError) {
+            assertEquals(BedJetError.WiFi(Codec.WiFiPhase.CANNOT_JOIN), error)
+        }
+    }
+
+    @Test
+    fun aFailureThatComesAndGoesUnseenIsStillReported() = runTest {
+        // The unit tried and failed again between two reports, so all that's seen is the same failure.
+        val link = ScriptedWiFiLink(21)
+        try {
+            link.joinWiFi("Home", "wrong password")
+            fail("joined")
+        } catch (error: BedJetError) {
+            assertEquals(BedJetError.WiFi(Codec.WiFiPhase.CANNOT_JOIN), error)
+        }
+    }
+
+    @Test
+    fun aJoinThatLosesTheLinkWaitsPastTheResultLeftFromBefore() = runTest {
+        // Joined before; the link drops for a moment during this test, which doesn't restart the unit.
+        val link = ScriptedWiFiLink(24, null, 24, 21)
+        val steps = mutableListOf<Int>()
+        try {
+            link.joinWiFi("Home", "wrong password") { steps += it }
+            fail("joined")
+        } catch (error: BedJetError) {
+            assertEquals(BedJetError.WiFi(Codec.WiFiPhase.CANNOT_JOIN), error)
+        }
+        assertEquals(emptyList<Int>(), steps)
+    }
+
+    @Test
+    fun aJoinGivesUpOnALinkThatStaysLost() = runTest {
+        // Unplugged partway through: nothing restarts the unit when it joins, so it isn't coming back by itself.
+        val link = ScriptedWiFiLink(0, 1, null)
+        try {
+            link.joinWiFi("Home", "12345678")
+            fail("joined")
+        } catch (error: BedJetError) {
+            assertEquals(BedJetError.NotConnected, error)
+        }
+    }
+
+    @Test
+    fun aFirmwareCheckFindsItUpToDate() = runTest {
+        val link = ScriptedWiFiLink(21, 1, 2, 3, 5, 26)
+        val found = link.updateFirmware()
+        assertEquals(listOf(Codec.updateFirmware.toList()), link.sent.map { it.toList() })
+        assertEquals(FirmwareUpdate.UpToDate, found)
+    }
+
+    @Test
+    fun aFirmwareCheckWaitsForTheBedJetToComeBackFromRestarting() = runTest {
+        // Asked to check, a BedJet 3 restarts first, dropping the link; the check carries on once it's back.
+        val link = ScriptedWiFiLink(26, null, 0, 1, 2, 3, 5, 26)
+        val steps = mutableListOf<Int>()
+        assertEquals(FirmwareUpdate.UpToDate, link.updateFirmware { steps += it })
+        assertEquals(listOf(Codec.WiFiPhase.RESTARTING, 1, 2, 3, 5), steps)
+    }
+
+    /**
+     * Captured from a BedJet 3 on V1.20 (407): it acknowledged 01 43, dropped the link 4 s later, and was back within
+     * a second reporting No update needed, with no steps in between.
+     */
+    @Test
+    fun aBedJetThatChecksWhileRestartingIsBelievedOnceBack() = runTest {
+        val back = data("01 56 1b 01 00 00 00 2a 42 00 0d 00 00 14 50 00 00 2b 00 12 03 0a 01 10 13 01 1a 35 00 00 f2")
+        assertEquals(Codec.WiFiPhase.UP_TO_DATE, Codec.parseStatus(back)?.extra?.wifiPhase)
+        val link = ScriptedWiFiLink(26, 26, null, 26)
+        assertEquals(FirmwareUpdate.UpToDate, link.updateFirmware())
+    }
+
+    @Test
+    fun firmwareInstalledWhileRestartingIsReported() = runTest {
+        val link = ScriptedWiFiLink(26, null, 26, firmware = listOf("V1.20 (407)", "V1.21 (412)"))
+        assertEquals(FirmwareUpdate.Updated("V1.21 (412)"), link.updateFirmware())
+    }
+
+    @Test
+    fun aFirmwareCheckWaitsPastTheResultLeftFromBefore() = runTest {
+        // Up to date from an earlier check; this one finds newer firmware and restarts into it, dropping the link.
+        val link = ScriptedWiFiLink(26, 26, 1, 5, 6, 7, null)
+        val steps = mutableListOf<Int>()
+        assertEquals(FirmwareUpdate.Installing, link.updateFirmware { steps += it })
+        // Its restart to install is still installing.
+        assertEquals(listOf(1, 5, 6), steps)
+    }
+
+    @Test
+    fun simulatedBedJetNeedsWiFiToCheckForFirmware() = runTest {
+        val link = DemoLink(scope = backgroundScope)
+        link.start()
+        testScheduler.advanceTimeBy(1_200)
+        try {
+            link.updateFirmware()
+            fail("checked without Wi-Fi")
+        } catch (error: BedJetError) {
+            assertEquals(BedJetError.WiFi(Codec.WiFiPhase.NO_NETWORK), error)
+        }
+        link.joinWiFi("Home", "12345678")
+        assertEquals("Home", link.wifiNetwork)
+        assertEquals(FirmwareUpdate.UpToDate, link.updateFirmware())
+        link.stop()
+    }
+}
+
+/**
+ * Reports the next of [phases] each time its status is read, as a BedJet 3 does over successive reports.
+ * A null phase drops the connection for a moment, as the unit does when it restarts, or for good when it ends the script.
+ */
+private class ScriptedWiFiLink(vararg phases: Int?, firmware: List<String> = emptyList()) : BedJetLink {
+    private var dropped = false
+    override val state: LinkState
+        get() = (if (dropped) LinkState.SEARCHING else LinkState.READY).also { if (phases != listOf(null)) dropped = false }
+    override var onStateChange: ((LinkState) -> Unit)? = null
+    override var onStatus: ((DeviceStatus) -> Unit)? = null
+    val sent = mutableListOf<ByteArray>()
+    var wifi: Pair<ByteArray, ByteArray>? = null
+        private set
+    private val phases = ArrayDeque(phases.toList())
+    /** What the unit says its firmware is, one answer per question. */
+    private val firmware = ArrayDeque(firmware)
+
+    override val lastStatus: DeviceStatus?
+        get() {
+            val phase = if (phases.size > 1) phases.removeFirst() else phases.firstOrNull()
+            if (phase == null) {
+                dropped = true
+                return null
+            }
+            return DeviceStatus(
+                remainingSeconds = 0, actualTemperature = 40, targetTemperature = 60, mode = Mode.STANDBY, fanStep = 7,
+                maxRuntimeMinutes = 0, minTemperature = 38, maxTemperature = 80, ambientTemperature = 40, lastShutdownReason = 0,
+                extra = DeviceStatus.Extra(ledEnabled = true, beepsMuted = false, programStep = 0, notification = 0, wifiPhase = phase),
+            )
+        }
+
+    override fun start() {}
+    override fun stop() {}
+    override suspend fun send(command: ByteArray) { sent += command }
+    override suspend fun query(request: Int): ByteArray {
+        if (request != Codec.Query.FIRMWARE || firmware.isEmpty()) throw BedJetError.BadResponse
+        return firmware.removeFirst().encodeToByteArray()
+    }
+    override suspend fun writeWiFi(network: ByteArray, password: ByteArray) { wifi = network to password }
 }

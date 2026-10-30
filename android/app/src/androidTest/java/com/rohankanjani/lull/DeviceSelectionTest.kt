@@ -254,6 +254,22 @@ class DeviceSelectionTest {
         assertEquals(guest.id, model.bedJet?.unit)
     }
 
+    /**
+     * A real BedJet 3 sends each report in two halves, and right after reconnecting, such as after restarting to check
+     * for firmware, only the first half comes for a moment. Its settings stay shown meanwhile, so the sheet holds still.
+     */
+    @Test
+    fun settingsStayWhileAReportsSecondHalfIsLate() = onMain {
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        waitUntil("a full report") { bedJet.settings != null }
+        val settings = bedJet.settings
+        unit(mine.id).report(bedJet.status!!.copy(extra = null))
+        assertNull(bedJet.status?.extra)
+        assertEquals(settings, bedJet.settings)
+    }
+
     @Test
     fun aCommandMeantForOneBedJetNeverReachesAnother() = onMain {
         val model = launch()

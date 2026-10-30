@@ -251,6 +251,7 @@ class AppModel(
             name = bedJet.name ?: DemoLink.DEFAULT_NAME,
             slots = listOf(StoredProgram("Summer nights", Schedule.templates[2].program.steps), null, null),
             scope = scope,
+            wifiNetwork = bedJet.wifiNetwork,
         ).apply { answers = !(options.demoFirstUnitAway && bedJet.unit == DemoDiscovery.SIMULATED[0].id) }
     }
 

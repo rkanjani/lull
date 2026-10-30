@@ -28,6 +28,14 @@ interface BedJetLink {
 
     /** Asks the unit for stored data and returns the reply payload. */
     suspend fun query(request: Int): ByteArray
+
+    /**
+     * Gives a BedJet 3 the Wi-Fi network it fetches firmware over: the name, then the password, which starts a
+     * connection test.
+     */
+    suspend fun writeWiFi(network: ByteArray, password: ByteArray) {
+        throw BedJetError.InvalidWiFi(BedJetError.NO_WIFI_SETUP)
+    }
 }
 
 // Remote
@@ -118,6 +126,124 @@ suspend fun BedJetLink.firmwareVersion(): String = when (generation) {
 private suspend fun BedJetLink.v2Info(): CodecV2.Info =
     CodecV2.parseInfo(query(CodecV2.Query.INFO)) ?: throw BedJetError.BadResponse
 
+// Wi-Fi and firmware
+
+/**
+ * Gives a BedJet 3 the Wi-Fi network it fetches firmware over, then follows the unit's test of it.
+ * [progress] hears each [Codec.WiFiPhase] step. Throws the unit's result unless it joined.
+ */
+suspend fun BedJetLink.joinWiFi(network: String, password: String, progress: (Int) -> Unit = {}) {
+    if (generation != Generation.V3) throw BedJetError.InvalidWiFi(BedJetError.NO_WIFI)
+    Codec.wifiProblem(network, password)?.let { throw BedJetError.InvalidWiFi(it) }
+    val shown = lastStatus?.extra?.wifiPhase
+    writeWiFi(network.encodeToByteArray(), password.encodeToByteArray())
+    val result = wifiResult(shown, restarts = false, progress)
+    // It has a network now, so "no network" is only the old result still showing.
+    if (result == Codec.WiFiPhase.NO_NETWORK) throw BedJetError.Timeout
+    if (result != Codec.WiFiPhase.WORKS) throw BedJetError.WiFi(result)
+}
+
+/**
+ * Asks a BedJet 3 to check BedJet's server for newer firmware, over its Wi-Fi. The unit can't only check:
+ * newer firmware is installed straight away, and the unit restarts, which drops the connection.
+ */
+suspend fun BedJetLink.updateFirmware(progress: (Int) -> Unit = {}): FirmwareUpdate {
+    if (generation != Generation.V3) throw BedJetError.InvalidWiFi(BedJetError.NO_WIFI)
+    val before = firmwareOrNull()
+    val shown = lastStatus?.extra?.wifiPhase
+    send(Codec.updateFirmware)
+    return when (val result = wifiResult(shown, restarts = true, progress)) {
+        Codec.WiFiPhase.UP_TO_DATE -> {
+            // The unit checks, and installs, while it's restarting, so newer firmware may already be running.
+            val after = firmwareOrNull()
+            if (before != null && after != null && after != before) FirmwareUpdate.Updated(after) else FirmwareUpdate.UpToDate
+        }
+        // About to restart into the new firmware, so asking its version now would only wait out the restart.
+        Codec.WiFiPhase.INSTALLING -> FirmwareUpdate.Installing
+        else -> throw BedJetError.WiFi(result)
+    }
+}
+
+/** Like Swift's `try?`: anything that goes wrong is ignored, but cancellation still cancels. */
+private suspend fun BedJetLink.firmwareOrNull(): String? = try {
+    firmwareVersion()
+} catch (error: kotlinx.coroutines.CancellationException) {
+    throw error
+} catch (_: Exception) {
+    null
+}
+
+/**
+ * Follows the unit's Wi-Fi phase until it gives a result. The result of its last attempt stays in the status
+ * until it starts again, so a result only counts once the unit has moved on from the one [shown] when asked.
+ *
+ * Asked to check for firmware, a BedJet 3 restarts within a few seconds and does the whole check while it's
+ * away, so the result is there as soon as it's back (captured: 01 43 acknowledged, link lost 4 s later, back
+ * within a second reporting No update needed). The official app waits for it to reconnect too. The link comes
+ * back by itself, so a dropped link is waited out, except once the unit is installing: then the restart is
+ * the end, and it comes back with the new firmware, so the result is [Codec.WiFiPhase.INSTALLING].
+ *
+ * Only a firmware check [restarts] the unit. Any other dropped link is just Bluetooth, and the result the
+ * unit shows once it's back may still be the one from before.
+ */
+private suspend fun BedJetLink.wifiResult(shown: Int?, restarts: Boolean, progress: (Int) -> Unit): Int {
+    var working = false
+    var installing = false
+    var restarted = false
+    var last: Int? = null
+    // Polled every 200 ms: 20 seconds to start, 10 minutes in all, which also bounds a restart. A link lost
+    // for 20 seconds when nothing restarted the unit is lost, not waited for.
+    var waited = 0
+    var away = 0
+    repeat(3000) {
+        if (state != LinkState.READY) {
+            if (installing) return Codec.WiFiPhase.INSTALLING
+            if (!restarts && away == 100) throw BedJetError.NotConnected
+            if (away == 0) {
+                waited = 0
+                if (restarts) {
+                    progress(Codec.WiFiPhase.RESTARTING)
+                    restarted = true
+                    working = false
+                    last = null
+                }
+            }
+            away += 1
+            delay(200)
+            return@repeat
+        }
+        away = 0
+        val phase = lastStatus?.extra?.wifiPhase
+        if (phase != null) {
+            if (!Codec.WiFiPhase.isResult(phase)) {
+                // Restarting once it's installing is still installing, not restarting to check.
+                val restartsToInstall = installing && phase == Codec.WiFiPhase.RESTARTING
+                if (phase != Codec.WiFiPhase.IDLE && phase != last && !restartsToInstall) progress(phase)
+                working = working || phase != Codec.WiFiPhase.IDLE
+                installing = installing || phase == Codec.WiFiPhase.UPDATING
+            } else if (working || restarted || (shown != null && phase != shown)) {
+                return phase
+            }
+            last = phase
+        }
+        waited += 1
+        if (!working && waited == 100) {
+            // A quick check can come and go between status reports, so a failure still showing is the answer.
+            val showing = last
+            if (showing != null && Codec.WiFiPhase.isResult(showing) &&
+                showing != Codec.WiFiPhase.WORKS && showing != Codec.WiFiPhase.UP_TO_DATE
+            ) {
+                return showing
+            }
+            throw BedJetError.Timeout
+        }
+        delay(200)
+    }
+    // A slow download can outlast the wait.
+    if (installing) return Codec.WiFiPhase.INSTALLING
+    throw BedJetError.Timeout
+}
+
 // Programs
 
 /**
@@ -170,7 +296,7 @@ private suspend fun BedJetLink.storeSequence(steps: List<ProgramStep>) {
     if (!steps.all { generation.supports(it.mode) }) throw BedJetError.InvalidProgram(CodecV2.UNSUPPORTED_MODES)
     val info = v2Info()
     if (!info.runsSequences) {
-        throw BedJetError.InvalidProgram("This BedJet V2 needs a firmware update before it can run schedules. Update it in the official BedJet app.")
+        throw BedJetError.InvalidProgram("This BedJet V2's firmware is too old to run schedules, and neither BedJet app can update it. Ask BedJet support about an update.")
     }
     // Steps can only last a duration, so ones that end at a time of day are measured from now.
     val now = LocalTime.now()
