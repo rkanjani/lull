@@ -161,7 +161,7 @@ struct TonightView: View {
             VStack(alignment: .leading, spacing: 10) {
                 header(eyebrow: snapshot.headed("Tonight"), title: schedule.name) {
                     // Started on the BedJet the widget shows, which may not be the one on screen in Lull.
-                    Button(intent: StartNightIntent(bedJet: snapshot.bedJet(nil).map(BedJetEntity.init))) {
+                    Button(intent: StartNightInLullIntent(bedJet: snapshot.bedJet(nil).map(BedJetEntity.init))) {
                         Text("Start")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.black)

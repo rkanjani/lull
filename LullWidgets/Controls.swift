@@ -6,7 +6,7 @@ import WidgetKit
 struct StartNightControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "com.rohankanjani.lull.start-night", provider: Provider()) { state in
-            ControlWidgetButton(action: StartNightIntent()) {
+            ControlWidgetButton(action: StartNightInLullIntent()) {
                 Label(state.isRunning ? "Night Running" : "Start Night", systemImage: "moon.stars.fill")
                 Text(state.name)
             }

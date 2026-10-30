@@ -36,6 +36,14 @@ your phone and your watch, over Watch Connectivity on Apple devices and the Wear
 Android, and is kept on the watch for its app, tile and complications. To do an errand while it's closed, Lull may
 briefly connect to your BedJet in the background, and lets go as soon as it's done.
 
+## Shortcuts and automations
+
+Lull's Shortcuts actions, and on Android the intents automation apps send it, can reach your BedJet while Lull
+isn't on screen. They connect only for that action and let go of the BedJet when it's done. On Android, any app on
+your phone can send these intents, as any app can open Lull, and Lull's reply to one (including what Lull last saw
+your BedJet doing) is broadcast on your phone, to the app that sent it when it says which app that is. None of it
+leaves your phone.
+
 ## Wi-Fi and firmware updates
 
 A BedJet 3 downloads firmware updates itself, over its own Wi-Fi, from BedJet's update server. If you set

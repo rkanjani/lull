@@ -158,6 +158,22 @@ public struct DeviceStatus: Equatable, Sendable {
         public var wifiPhase = 0
     }
 
+    public init(remainingSeconds: Int, actualTemperature: Int, targetTemperature: Int, mode: Mode, fanStep: Int,
+                maxRuntimeMinutes: Int, minTemperature: Int, maxTemperature: Int, ambientTemperature: Int,
+                lastShutdownReason: Int, extra: Extra?) {
+        self.remainingSeconds = remainingSeconds
+        self.actualTemperature = actualTemperature
+        self.targetTemperature = targetTemperature
+        self.mode = mode
+        self.fanStep = fanStep
+        self.maxRuntimeMinutes = maxRuntimeMinutes
+        self.minTemperature = minTemperature
+        self.maxTemperature = maxTemperature
+        self.ambientTemperature = ambientTemperature
+        self.lastShutdownReason = lastShutdownReason
+        self.extra = extra
+    }
+
     public var fanPercent: Int { (fanStep + 1) * 5 }
     public var isRunning: Bool { mode != .standby }
 }

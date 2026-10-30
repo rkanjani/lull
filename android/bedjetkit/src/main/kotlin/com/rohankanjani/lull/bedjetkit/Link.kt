@@ -15,6 +15,10 @@ interface BedJetLink {
     var onStatus: ((DeviceStatus) -> Unit)?
 
     fun start()
+
+    /** Connects whenever the BedJet is free, without asking another phone to hand it over. */
+    fun listen() = start()
+
     fun stop()
 
     /**

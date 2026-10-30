@@ -34,6 +34,12 @@ Lull target's General tab):
 Build numbers are picked automatically: one higher than anything already uploaded for that version.
 Docs-only changes (Markdown files and screenshots) don't trigger a release.
 
+Lull uses the `bluetooth-central` and `bluetooth-peripheral` background modes (`Lull/Info.plist`), so the watch's
+errands and Lull's Shortcuts actions can reach the BedJet while Lull is closed, for example a bedtime automation that
+preheats it. If App Review asks, the note in App Store Connect (App Review Information) can say: "Lull's watch app and
+Shortcuts actions connect to the user's own BedJet over Bluetooth while Lull is in the background, only for what was
+asked, and disconnect when it is done."
+
 ## App Store one-time setup
 
 The workflow stays off until the steps below are done.

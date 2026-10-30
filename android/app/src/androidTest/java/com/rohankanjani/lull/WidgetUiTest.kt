@@ -28,6 +28,7 @@ import com.rohankanjani.lull.bedjetkit.Mode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -125,6 +126,24 @@ class WidgetUiTest {
         draw(TonightWidget.MEDIUM, { QuickRemoteContent(running, RemotePreset.defaults, "forgotten", now) }) {
             onNode(glanceTextEqualTo("FORGOTTEN BEDJET")).assertExists()
         }
+    }
+
+    @Test
+    fun lullsOwnShortcutsGoThroughItsCommandScreen() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        // Lull's own Start Night, from the tile, the app shortcut and the widgets, starts tonight's schedule.
+        assertEquals(AppCommands.Command.StartNight(), AppCommands.from(AppCommands.startNightIntent(context)))
+        assertEquals(AppCommands.Command.StartNight("right"), AppCommands.from(AppCommands.startNightIntent(context, "right")))
+        // Its Turn On and Turn Off shortcuts are the automation actions of those names, through the same screen.
+        for (action in listOf(AutomationCall.TURN_ON, AutomationCall.TURN_OFF)) {
+            val shortcut = AppCommands.actionIntent(context, action)
+            assertEquals(CommandActivity::class.java.name, shortcut.component?.className)
+            assertEquals(AppCommands.Command.Automate(AutomationCall(action)), AppCommands.from(shortcut))
+        }
+        // An automation app can't send one to Lull's main screen, which takes nothing but a tab.
+        assertNull(AppCommands.shown(Intent(AutomationCall.TURN_ON).putExtra("mode", "cool")))
+        val screen = Intent(AutomationCall.TURN_ON).setPackage(context.packageName)
+        assertTrue(context.packageManager.queryIntentActivities(screen, 0).isEmpty())
     }
 
     @Test

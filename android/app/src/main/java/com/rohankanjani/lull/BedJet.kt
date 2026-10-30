@@ -2,6 +2,7 @@ package com.rohankanjani.lull
 
 import android.icu.text.ListFormatter
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.rohankanjani.lull.bedjetkit.BedJetError
@@ -144,7 +145,14 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
 
     /** Set once Lull has looked for the BedJet for a while without reaching it, to suggest what to check. */
     var isSlowToFind by mutableStateOf(false); private set
-    var isBusy by mutableStateOf(false); private set
+    /** Commands under way. More than one can be, such as a Remote change while an automation runs. */
+    private var commandsUnderWay by mutableIntStateOf(0)
+    val isBusy: Boolean get() = commandsUnderWay > 0
+    /**
+     * Set as Lull lets go of a connected BedJet, until the link says it has. Over Bluetooth that takes a moment, and until
+     * then the link still says it's ready, though nothing sent on it arrives.
+     */
+    private var isLettingGo = false
     private var writingSchedule by mutableStateOf(false)
     /**
      * A schedule is being written to the BedJet, which takes several steps. Its Live Update holds still while this is
@@ -274,11 +282,12 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     }
 
     /**
-     * The BedJet talks to one phone at a time, so it is released whenever Lull leaves the screen.
-     * Holding on to it would make coming back instant, but a phone that is off screen cannot be
-     * relied on to hear another phone asking for the BedJet.
+     * The BedJet talks to one phone at a time, so it is released whenever Lull leaves the screen, and as soon as
+     * an errand or action that reached it from the background is done. Holding on to it would make coming back
+     * instant, but a phone that is off screen cannot be relied on to hear another phone asking for the BedJet.
      */
     fun pause() {
+        if (linkState == LinkState.READY) isLettingGo = true
         link?.stop()
         // A change still settling would otherwise wait until Lull is opened again.
         if (settling != null) commitObserved()
@@ -286,8 +295,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     }
 
     fun resume(asking: Boolean) {
-        val ble = link as? BleLink
-        if (!asking && ble != null) ble.listen() else link?.start()
+        if (asking) link?.start() else link?.listen()
         restartSearchTimer()
     }
 
@@ -339,6 +347,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
 
     private fun linkStateChanged(state: LinkState) {
         linkState = state
+        if (state != LinkState.READY) isLettingGo = false
         timeSearch()
         // Gone, so restarted, or about to come back from one.
         if (state != LinkState.READY) restartsToInstall = false
@@ -428,48 +437,52 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
 
     suspend fun startTonight() {
         val schedule = tonight ?: return
-        val link = link ?: return
+        if (link == null) return
         isSavingSchedule = true
         try {
-            startTonight(schedule, link)
+            perform { startSchedule(schedule, choosingSlot = true) }
         } finally {
             isSavingSchedule = false
         }
     }
 
-    private suspend fun startTonight(schedule: Schedule, link: BedJetLink) {
-        perform {
-            // Demos that show a night in progress pretend it started earlier.
-            val elapsed = if (link is DemoLink) app.options.demoElapsedMinutes else 0
-            val startedAt = System.currentTimeMillis() - elapsed * 60_000L
-            // Known for certain once connected, which `perform` waited for; checked before anything is written.
-            problem(schedule, startedAt)?.let { throw BedJetError.InvalidProgram(it) }
-            // With a wake time, every phase is scaled to end at it from now. A BedJet 3 is still given the wake time itself for
-            // the last step, so it keeps to it by its own clock.
-            val tonight = schedule.resolved(startingAt = Format.minuteOfDay(startedAt))
-            // A V2 holds just the one sequence, which Lull always replaces.
-            val slot: Int
-            if (link.generation == Generation.V2) {
-                slot = 0
-            } else {
-                if (deviceSlots.isEmpty()) refreshSlots()
-                val free = this.slot ?: deviceSlots.indexOf(null).takeIf { it >= 0 }
-                if (free == null) {
-                    needsSlotChoice = true
-                    return@perform
-                }
-                slot = free
-                this.slot = slot
+    /**
+     * Saves a schedule into Lull's slot on the BedJet and starts it. When every slot is taken, the person picks
+     * one to reuse; without anyone there to pick, as in an automation, that is an error instead.
+     */
+    private suspend fun startSchedule(schedule: Schedule, choosingSlot: Boolean) {
+        val link = connectedLink()
+        // Demos that show a night in progress pretend it started earlier.
+        val elapsed = if (link is DemoLink) app.options.demoElapsedMinutes else 0
+        val startedAt = System.currentTimeMillis() - elapsed * 60_000L
+        // Known for certain once connected, which `carryOut` waited for; checked before anything is written.
+        problem(schedule, startedAt)?.let { throw BedJetError.InvalidProgram(it) }
+        // With a wake time, every phase is scaled to end at it from now. A BedJet 3 is still given the wake time itself for
+        // the last step, so it keeps to it by its own clock.
+        val tonight = schedule.resolved(startingAt = Format.minuteOfDay(startedAt))
+        // A V2 holds just the one sequence, which Lull always replaces.
+        val slot: Int
+        if (link.generation == Generation.V2) {
+            slot = 0
+        } else {
+            if (deviceSlots.isEmpty()) refreshSlots()
+            val free = this.slot ?: deviceSlots.indexOf(null).takeIf { it >= 0 }
+            if (free == null) {
+                if (!choosingSlot) throw AutomationError.SlotsFull
+                needsSlotChoice = true
+                return
             }
-            link.store(tonight.program, slot)
-            link.startProgram(slot)
-            confirmStarted()
-            run = ActiveRun(tonight, startedAt)
-            remoteTimer = RemoteTimer.Longest
-            record(HistoryEntry.Event.ScheduleStarted(schedule.name, tonight.phases))
-            if (link is DemoLink && elapsed > 0) link.skipAhead(elapsed)
-            attempt { refreshSlots() }
+            slot = free
+            this.slot = slot
         }
+        link.store(tonight.program, slot)
+        link.startProgram(slot)
+        confirmStarted()
+        run = ActiveRun(tonight, startedAt)
+        remoteTimer = RemoteTimer.Longest
+        record(HistoryEntry.Event.ScheduleStarted(schedule.name, tonight.phases))
+        if (link is DemoLink && elapsed > 0) link.skipAhead(elapsed)
+        attempt { refreshSlots() }
     }
 
     /** A BedJet that can't run a schedule stays off and raises a notification instead of starting it. */
@@ -497,23 +510,24 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     }
 
     suspend fun endNight() {
-        val link = link ?: return
+        if (link == null) return
+        perform { stopNight() }
+    }
+
+    private suspend fun stopNight() {
+        val link = connectedLink()
         val name = run?.schedule?.name
-        perform {
-            link.setMode(Mode.STANDBY)
-            run = null
-            forgetRemoteTimer()
-            record(HistoryEntry.Event.ScheduleEnded(name, HistoryEntry.Ending.ByYou))
-        }
+        link.setMode(Mode.STANDBY)
+        run = null
+        forgetRemoteTimer()
+        record(HistoryEntry.Event.ScheduleEnded(name, HistoryEntry.Ending.ByYou))
     }
 
     // Remote
 
     suspend fun setMode(mode: Mode) {
-        val link = link ?: return
-        // Captured first: the BedJet's report that the schedule stopped can clear `run` before this returns, and a
-        // time picked while another phone hands the BedJet over comes after this tap.
-        val endingSchedule = run?.schedule?.name
+        if (link == null) return
+        // Captured first: a time picked while another phone hands the BedJet over comes after this tap.
         val asked = System.currentTimeMillis()
         // Shown as a time, the end on screen holds across modes: a time picked here, or else the BedJet's own countdown,
         // such as a duration picked here or a timer set on another phone.
@@ -524,51 +538,66 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
             // Counted from when the BedJet said it, so a report from a while ago doesn't move the end later.
             remoteTimer = RemoteTimer.Until((statusReceivedAt ?: System.currentTimeMillis()) + shown.remainingSeconds * 1000L)
         }
-        perform {
-            // Until the new mode is given its own run, a fan or temperature change leaves the timer alone.
-            forgetRemoteTimer()
-            link.setMode(mode)
-            // The BedJet only says it's off in its next report, and Lull may have let go of it by then, leaving it shown
-            // as running outside Lull. The BedJet took the command, so it is off already; setting `run` publishes it.
-            if (mode == Mode.STANDBY) status = status?.copy(mode = Mode.STANDBY)
-            turnedOffAt = if (mode == Mode.STANDBY) System.currentTimeMillis() else null
-            run = null
-            if (endingSchedule != null) record(HistoryEntry.Event.ScheduleEnded(endingSchedule, HistoryEntry.Ending.ByYou))
-            // A time picked on the Remote holds across modes until it passes, while the Remote shows the time. Otherwise each
-            // mode starts at its longest run, as the timer always has.
-            if (mode == Mode.STANDBY || !remoteTimer.isAhead || !app.remoteTimerShowsTime) remoteTimer = RemoteTimer.Longest
-            if (mode != Mode.STANDBY) extendRuntime(entering = mode, asked = asked)
-        }
+        perform { changeMode(mode, asked) }
     }
 
     suspend fun setTemperature(halfCelsius: Int) {
-        val link = link ?: return
+        if (link == null) return
         val asked = System.currentTimeMillis()
-        perform {
-            val keepsTimer = keepsTimer()
-            if (keepsTimer) readTimerBack()
-            link.setTemperature(halfCelsius)
-            if (keepsTimer) extendRuntime(asked = asked)
-        }
+        perform { changeTemperature(halfCelsius, asked) }
     }
 
     suspend fun setFan(percent: Int) {
-        val link = link ?: return
+        if (link == null) return
         val asked = System.currentTimeMillis()
-        perform {
-            val keepsTimer = keepsTimer()
-            if (keepsTimer) readTimerBack()
-            link.setFan(percent / 5 - 1)
-            if (keepsTimer) extendRuntime(asked = asked)
-        }
+        perform { changeFan(percent, asked) }
     }
 
     suspend fun setRuntime(minutes: Int) {
-        val link = link ?: return
+        if (link == null) return
+        perform { changeRuntime(minutes) }
+    }
+
+    private suspend fun changeMode(mode: Mode, asked: Long) {
+        val link = connectedLink()
+        // Captured first: the BedJet's report that the schedule stopped can clear `run` before this returns.
+        val endingSchedule = run?.schedule?.name
+        // Until the new mode is given its own run, a fan or temperature change leaves the timer alone.
+        forgetRemoteTimer()
+        link.setMode(mode)
+        // The BedJet only says it's off in its next report, and Lull may have let go of it by then, leaving it shown
+        // as running outside Lull. The BedJet took the command, so it is off already; setting `run` publishes it.
+        if (mode == Mode.STANDBY) status = status?.copy(mode = Mode.STANDBY)
+        turnedOffAt = if (mode == Mode.STANDBY) System.currentTimeMillis() else null
+        run = null
+        if (endingSchedule != null) record(HistoryEntry.Event.ScheduleEnded(endingSchedule, HistoryEntry.Ending.ByYou))
+        // A time picked on the Remote holds across modes until it passes, while the Remote shows the time. Otherwise each
+        // mode starts at its longest run, as the timer always has.
+        if (mode == Mode.STANDBY || !remoteTimer.isAhead || !app.remoteTimerShowsTime) remoteTimer = RemoteTimer.Longest
+        if (mode != Mode.STANDBY) extendRuntime(entering = mode, asked = asked)
+    }
+
+    private suspend fun changeTemperature(halfCelsius: Int, asked: Long) {
+        val link = connectedLink()
+        val keepsTimer = keepsTimer()
+        if (keepsTimer) readTimerBack()
+        link.setTemperature(halfCelsius)
+        if (keepsTimer) extendRuntime(asked = asked)
+    }
+
+    private suspend fun changeFan(percent: Int, asked: Long) {
+        val link = connectedLink()
+        val keepsTimer = keepsTimer()
+        if (keepsTimer) readTimerBack()
+        link.setFan(percent / 5 - 1)
+        if (keepsTimer) extendRuntime(asked = asked)
+    }
+
+    private suspend fun changeRuntime(minutes: Int) {
         // From now on the timer counts down as it is: nothing on this phone changes it until a mode is chosen.
         remoteTimer = RemoteTimer.Picked
         timePickedAt = System.currentTimeMillis()
-        perform { link.setRuntime(minutes) }
+        connectedLink().setRuntime(minutes)
     }
 
     /**
@@ -708,35 +737,51 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     }
 
     suspend fun setLED(on: Boolean) {
-        val link = link ?: return
-        perform { link.setLED(on) }
+        if (link == null) return
+        perform { connectedLink().setLED(on) }
     }
 
     suspend fun setMuted(muted: Boolean) {
-        val link = link ?: return
-        perform { link.setMuted(muted) }
+        if (link == null) return
+        perform { connectedLink().setMuted(muted) }
     }
 
+    /** Does what a control asked for, showing anything that goes wrong. */
     private suspend fun perform(work: suspend () -> Unit) {
-        // Widgets, tiles and shortcuts reach here too, so this is checked here and not only by the buttons.
+        // Widgets, tiles, shortcuts and the watch reach here too, so this is checked here and not only by the buttons.
+        // Actions from automation apps check the same in [carryOutAction], to say so in their result.
         if (isUsingWiFi) {
             app.report("Your BedJet is setting up Wi-Fi or updating its firmware. Try again once it's done.", from = this)
             return
         }
-        isBusy = true
         try {
-            takeControl()
-            work()
+            carryOut(work)
         } catch (error: CancellationException) {
             // A newer slider move replaced this one, or the errand it was for ran out of time; nothing went wrong.
             throw error
         } catch (error: Exception) {
             app.report(error.message ?: BedJetError.BadResponse.message.orEmpty(), from = this)
+        }
+    }
+
+    /** Takes control of the BedJet and does the work, one thing at a time. What goes wrong is thrown to the caller. */
+    private suspend fun <T> carryOut(work: suspend () -> T): T = underWay {
+        takeControl()
+        work()
+    }
+
+    /** Counts the work as a command under way while it runs, so the BedJet shows as busy. */
+    private suspend fun <T> underWay(work: suspend () -> T): T {
+        commandsUnderWay += 1
+        try {
+            return work()
         } finally {
-            isBusy = false
+            commandsUnderWay -= 1
             lastCommandAt = System.currentTimeMillis()
         }
     }
+
+    private fun connectedLink(): BedJetLink = link ?: throw BedJetError.NotConnected
 
     // Wi-Fi and firmware
 
@@ -745,10 +790,16 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     /** Updating restarts the BedJet, so it waits until that interrupts nothing. */
     val canUpdateFirmware: Boolean get() = isIdle && !isBusy && !isUsingWiFi
     val canJoinWiFi: Boolean get() = isConnected && !isUsingWiFi
-    /** The BedJet is away because it's checking for or installing firmware, and will be back. */
+    /**
+     * The BedJet is away because it's checking for or installing firmware, and will be back. Going by the clock too,
+     * until [restartPatienceMillis] after it was asked to check: the timer that marks it overdue counts only time the
+     * phone is awake, so Lull woken long after, as by an action, would otherwise still be holding everything for it.
+     */
     val expectsRestart: Boolean
-        get() = wifiActivity?.takeIf { it.purpose == WiFiActivity.Purpose.UPDATING }
-            ?.let { it.isRunning || (it.awaitsRestart && !it.restartOverdue) } ?: false
+        get() = wifiActivity?.takeIf { it.purpose == WiFiActivity.Purpose.UPDATING }?.let {
+            val overdue = it.restartOverdue || System.currentTimeMillis() - it.startedAt >= restartPatienceMillis
+            it.isRunning || (it.awaitsRestart && !overdue)
+        } ?: false
     /** Away while it restarts, and only that: Bluetooth being off or another phone having it still say so. */
     val isRestarting: Boolean
         get() = expectsRestart && (linkState == LinkState.SEARCHING || linkState == LinkState.CONNECTING)
@@ -837,6 +888,9 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
             step = if (purpose == WiFiActivity.Purpose.UPDATING) "Asking your BedJet to check…" else "Asking your BedJet…",
             offered = offered,
         )
+        // A command already on its way, such as one from an automation, finishes first so the two don't interleave.
+        // Actions that come after are refused while this runs.
+        while (isBusy) delay(200)
         try {
             val outcome = work(link) { phase -> step(phase)?.let { wifiActivity = wifiActivity?.copy(step = it) } }
             wifiActivity = wifiActivity?.copy(outcome = outcome)
@@ -868,7 +922,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     private fun stopExpectingRestartLater() {
         val startedAt = wifiActivity?.startedAt ?: return
         app.scope.launch {
-            delay(600_000)
+            delay(restartPatienceMillis)
             val activity = wifiActivity
             if (activity?.startedAt == startedAt && activity.awaitsRestart) wifiActivity = activity.copy(restartOverdue = true)
         }
@@ -950,6 +1004,170 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         throw if (wasElsewhere) BedJetError.InUseElsewhere else BedJetError.NotConnected
     }
 
+    // Automation
+
+    /**
+     * Restarting into new firmware. [expectsRestart] goes by the clock too, so an action long after an install doesn't
+     * find it still restarting.
+     */
+    val isInstallingUpdate: Boolean get() = isRestarting
+
+    /**
+     * Waits, for up to [withinMillis], until a BedJet Lull just let go of has dropped the connection. An automation app
+     * sends an action straight after the one before, which let go of the BedJet as it finished; reaching for it before
+     * the connection drops would find the link still ready, and what's sent on it would be lost.
+     */
+    suspend fun waitUntilLetGo(withinMillis: Long) {
+        val deadline = System.currentTimeMillis() + withinMillis
+        while (isLettingGo && System.currentTimeMillis() < deadline) delay(50)
+    }
+
+    /**
+     * Reaches the BedJet for an action while Lull is off screen, but only if it is free: an iPhone can't ask another
+     * phone for it from the background, and an automation nobody is watching shouldn't take it from a partner
+     * anyway. Gives up before the link would scan for the unit, which finds nothing in the background.
+     */
+    suspend fun reachIfFree(withinMillis: Long) {
+        resume(asking = false)
+        val deadline = System.currentTimeMillis() + withinMillis
+        while (System.currentTimeMillis() < deadline) {
+            when (linkState) {
+                LinkState.READY -> return
+                LinkState.YIELDED, LinkState.BLUETOOTH_OFF, LinkState.UNAUTHORIZED -> throw AutomationError.NeedsLull
+                LinkState.SEARCHING, LinkState.CONNECTING -> delay(50)
+            }
+        }
+        throw AutomationError.NeedsLull
+    }
+
+    /**
+     * Starts a schedule for an action. A night already under way, from this phone or another, is left running. With every
+     * slot taken, an action that went on in Lull asks which to reuse ([choosingSlot]), as Start Night there does.
+     */
+    suspend fun start(schedule: Schedule, choosingSlot: Boolean = false): Started = carryOutAction {
+        val run = run
+        when {
+            run != null -> Started.AlreadyRunning(run.schedule.name)
+            runningElsewhereStep != null -> Started.AlreadyRunning(null)
+            else -> {
+                // Only while it is written, so a night left running or the wait for the BedJet doesn't hold anything still.
+                isSavingSchedule = true
+                try {
+                    startSchedule(schedule, choosingSlot)
+                } finally {
+                    isSavingSchedule = false
+                }
+                // Not started yet: Lull is asking which slot to reuse.
+                if (this.run == null) Started.ChoosingSlot else Started.Now
+            }
+        }
+    }
+
+    /**
+     * Sets the air as the Remote would. With a mode it turns the air on in that mode, ending a schedule that is
+     * running; without one it changes the air that is already on. Everything is checked before anything is sent.
+     */
+    suspend fun apply(air: AirSettings, fahrenheit: Boolean): AppliedAir {
+        // Captured first: a time picked while the action reaches the BedJet comes after it.
+        val asked = System.currentTimeMillis()
+        return carryOutAction {
+            val mode = air.mode ?: status?.mode ?: Mode.STANDBY
+            air.mode?.let { wanted -> problem(using = wanted)?.let { throw AutomationError.UnsupportedMode(it) } }
+            if (air.mode == null) {
+                if (mode == Mode.STANDBY) throw AutomationError.AirOff
+                if (air.degrees != null) Automation.temperatureRefusal(mode, generation)?.let { throw it }
+                // The Remote hides its timer while a schedule runs, since the schedule times its own phases.
+                if (air.minutes != null && (run != null || runningElsewhereStep != null)) throw AutomationError.ScheduleSetsTiming
+            }
+            var applied = AppliedAir(mode)
+            air.mode?.let { wanted ->
+                // Without a run time, Turn On runs as long as the BedJet allows, not until a time once picked on the Remote.
+                if (air.minutes == null) remoteTimer = RemoteTimer.Longest
+                changeMode(wanted, asked)
+            }
+            if (air.degrees != null && adjustsTemperature(mode)) {
+                val halfCelsius = Automation.halfCelsius(air.degrees, fahrenheit, mode, status)
+                changeTemperature(halfCelsius, asked)
+                applied = applied.copy(temperature = halfCelsius)
+            }
+            if (air.fanPercent != null) {
+                val percent = Automation.fanPercent(air.fanPercent)
+                changeFan(percent, asked)
+                applied = applied.copy(fanPercent = percent)
+            }
+            if (air.minutes != null) {
+                val runTime = Automation.runTimeMinutes(air.minutes, mode, status)
+                changeRuntime(runTime)
+                applied = applied.copy(minutes = runTime)
+            }
+            applied
+        }
+    }
+
+    /** Ends the night if a schedule is running, otherwise turns the air off. */
+    suspend fun turnOff(): TurnedOff = carryOutAction {
+        val run = run
+        when {
+            run != null -> {
+                stopNight()
+                TurnedOff.EndedNight(run.schedule.name)
+            }
+            runningElsewhereStep != null -> {
+                stopNight()
+                TurnedOff.EndedNight(null)
+            }
+            status?.isRunning != true -> TurnedOff.AlreadyOff
+            else -> {
+                changeMode(Mode.STANDBY, asked = System.currentTimeMillis())
+                TurnedOff.StoppedAir
+            }
+        }
+    }
+
+    // A V2 sets the light and the beeps together, so it needs to know the other one first, which the status says.
+    suspend fun turnLightRing(on: Boolean) = carryOutAction { connectedLink().setLED(on) }
+
+    suspend fun muteBeeps(muted: Boolean) = carryOutAction { connectedLink().setMuted(muted) }
+
+    /**
+     * Does an action's work once the BedJet has said what it is doing now. Its commands would go in among the Wi-Fi
+     * setup's or the update's, so it is refused while the BedJet uses its Wi-Fi ([isUsingWiFi]), as the controls are.
+     * That is checked once the BedJet has reported, since one may have started while the action was reaching it, or on
+     * another phone, and none starts after. Once the BedJet is installing and away, the action finds it unreachable as
+     * usual, and an update that finished while Lull was closed doesn't hold it up.
+     */
+    private suspend fun <T> carryOutAction(work: suspend () -> T): T {
+        // Not yet under way while it waits: the first report since connecting can end a night that ran out or stopped
+        // early while Lull was closed, which is only recorded while no command of Lull's is under way. Control is taken only
+        // here: should the BedJet go to another phone during the wait, the action fails rather than asking for it back.
+        takeControl()
+        awaitStatus()
+        return underWay {
+            if (isUsingWiFi) throw AutomationError.Updating
+            work()
+        }
+    }
+
+    /**
+     * Waits for the BedJet's first full report since it connected, which says what it is doing now rather than what Lull
+     * last saw before it let go.
+     */
+    private suspend fun awaitStatus() {
+        awaitReport(since = connectedAt, timeout = 3_000)
+        if (!hasReported(since = connectedAt)) throw BedJetError.Timeout
+    }
+
+    /** What the BedJet is doing as far as Lull knows: live while connected, otherwise as it was last seen. */
+    val reading: AirReading?
+        get() {
+            val status = status
+            val step = status?.extra?.programStep
+            if (isConnected && status != null && step != null) {
+                return AirReading(status.mode, status.targetTemperature, status.fanPercent, step, status.remainingSeconds, System.currentTimeMillis())
+            }
+            return lastSeen?.let { AirReading(it.mode, it.temperature, it.fanPercent, it.programStep, it.remainingSeconds, it.at) }
+        }
+
     private fun logConnection() {
         if (!app.options.logsConnections) return
         val timing = (link as? BleLink)?.lastConnection ?: return
@@ -999,7 +1217,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
      * Lull does: it waits for the BedJet to connect by itself and say what it's doing. One another phone has, or
      * running a schedule another phone started, is left as it is, shown in Lull for the person to decide.
      */
-    private suspend fun reachesIfFree(): Boolean {
+    suspend fun reachesIfFree(): Boolean {
         val deadline = System.currentTimeMillis() + freeWait
         while (System.currentTimeMillis() < deadline) {
             if (linkState == LinkState.YIELDED) return false
@@ -1138,6 +1356,12 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     fun unsupportedModes(schedule: Schedule): List<Mode> =
         schedule.phases.map { it.mode }.filter { !generation.supports(it) }.distinct()
 
+    /** Why this BedJet can't use a mode, if it can't. */
+    fun problem(using: Mode): String? {
+        if (generation.supports(using)) return null
+        return "$displayName is a BedJet V2, which can't run ${using.title}."
+    }
+
     /** Why a schedule can't run on this BedJet when started at [now], if it can't. */
     fun problem(schedule: Schedule, now: Long = System.currentTimeMillis()): String? {
         val modes = unsupportedModes(schedule)
@@ -1172,6 +1396,8 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         var staleReportWindow = 2_000L
         /** How long a widget, tile or shortcut waits for the BedJet to connect by itself before leaving it to the person. */
         var freeWait = 15_000L
+        /** How long a BedJet installing an update is expected back from restarting. Tests wait less. */
+        var restartPatienceMillis = 600_000L
     }
 }
 

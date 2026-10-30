@@ -19,6 +19,8 @@ object AppCommands {
         data class StartNight(val bedJet: String? = null) : Command
         /** A Quick Remote button: sets a BedJet to a preset, or the one on screen when none is named. */
         data class Remote(val preset: RemotePreset, val bedJet: String? = null) : Command
+        /** An automation sent to Lull's screen, to finish what couldn't be done in the background. */
+        data class Automate(val call: AutomationCall) : Command
     }
 
     /** What a widget, tile or shortcut asks for by starting the app. */
@@ -45,13 +47,13 @@ object AppCommands {
 
     /**
      * The command an intent from a widget, tile or shortcut carries, if any. Only [CommandActivity] reads these, as no
-     * other app can open it.
+     * other app can open it. Lull's own Turn On and Turn Off shortcuts are the automation actions of those names.
      */
     fun from(intent: Intent?): Command? = when {
         intent == null -> null
         intent.action == ACTION_START_NIGHT -> Command.StartNight(intent.getStringExtra(EXTRA_BEDJET))
         intent.action == ACTION_REMOTE_PRESET -> remotePreset(intent)?.let { Command.Remote(it, intent.getStringExtra(EXTRA_BEDJET)) }
-        else -> shown(intent)
+        else -> AutomationCall.from(intent)?.let(Command::Automate) ?: shown(intent)
     }
 
     /**
@@ -100,6 +102,13 @@ object AppCommands {
             intent.getIntExtra(EXTRA_FAN, usual.fanPercent),
         )
     }
+
+    /**
+     * Opens Lull to do one of the automation actions, as Lull's own Turn On and Turn Off shortcuts do. Like its other
+     * buttons, these set the BedJet only once it's free (see [runAutomation]).
+     */
+    fun actionIntent(context: Context, action: String): Intent =
+        Intent(context, CommandActivity::class.java).setAction(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
     fun openIntent(context: Context, tab: LullTab, showing: String? = null): Intent =
         Intent(Intent.ACTION_VIEW, Uri.parse(showing?.let(tab::link) ?: tab.link), context, MainActivity::class.java)

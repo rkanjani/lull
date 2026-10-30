@@ -24,6 +24,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.builtins.ListSerializer
@@ -93,14 +94,15 @@ class DeviceSelectionTest {
         block()
     }
 
-    private fun launch(demo: Boolean = false): AppModel {
+    /** Lull launched by the person, on screen. Off screen is a launch to run an automation. */
+    private fun launch(demo: Boolean = false, onScreen: Boolean = true): AppModel {
         val storage = Storage(
             directory = directory,
             prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE),
             linkPrefs = context.getSharedPreferences("$prefsName.link", Context.MODE_PRIVATE),
         )
         // A starter schedule's wake time can be more than 16 hours away, which would make starting a night depend on the time of day.
-        return AppModel(context, LaunchOptions(noWakeTimes = true), storage, demoMode = demo, makesLink = { unit(it.unit!!) }, discovery = { discovery })
+        return AppModel(context, LaunchOptions(noWakeTimes = true), storage, demoMode = demo, makesLink = { unit(it.unit!!) }, discovery = { discovery }, onScreen = onScreen)
             .also { launched += it }
     }
 
@@ -941,5 +943,415 @@ class DeviceSelectionTest {
         assertEquals(sent, unit(mine.id).sent)
         assertEquals(first.id, model.bedJet?.id)
         assertFalse(unit(partners.id).sent.contains(Codec.setMode(Mode.COOL)!!.toList()))
+    }
+
+    // Automations
+
+    /** Lull in the background with a BedJet it was using, as when an automation runs at bedtime. */
+    private suspend fun backgrounded(unit: NearbyBedJet): Pair<AppModel, BedJet> {
+        val model = launch()
+        model.choose(unit)
+        val bedJet = connected(unit, model)
+        model.appMovedToBackground()
+        waitUntil("${unit.name} to be let go") { !bedJet.isConnected }
+        return model to bedJet
+    }
+
+    private suspend fun failure(action: suspend () -> String): String? {
+        try {
+            action()
+            fail("The action should have failed")
+        } catch (error: AutomationFailure) {
+            return error.message
+        }
+        return null
+    }
+
+    @Test
+    fun aLaunchOffScreenConnectsToNothing() = onMain {
+        val model = launch()
+        model.choose(mine)
+        connected(mine, model)
+        model.appMovedToBackground()
+
+        fakes.clear()
+        val relaunched = launch(onScreen = false)
+        assertEquals(mine.id, relaunched.bedJet?.unit)
+        assertFalse(relaunched.status(relaunched.bedJet!!).nightRunning)
+        // Its link is set up for later, but nothing connects, and no other phone is asked for the BedJet.
+        assertEquals(0, unit(mine.id).starts + unit(mine.id).listens + unit(mine.id).requests)
+    }
+
+    @Test
+    fun anActionWaitsOutTheBedJetsWiFi() = onMain {
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        val joining = async { bedJet.joinWiFi("Home", "password1") }
+        waitUntil("the BedJet to start on its Wi-Fi") { bedJet.wifiActivity?.isRunning == true }
+        val message = failure { model.perform(AutomationRequest.LightRing(on = false), bedJet) }
+        assertEquals(AutomationError.Updating.message, message)
+        joining.await()
+        assertEquals(false, bedJet.wifiActivity?.failed)
+    }
+
+    /** Lull in the background with a BedJet that began installing an update, as after updating it at bedtime. */
+    private suspend fun installingAnUpdate(): Pair<AppModel, BedJet> {
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        bedJet.joinWiFi("Home", "password1")
+        unit(mine.id).device.offerFirmwareUpdate()
+        bedJet.updateFirmware()
+        assertEquals(true, bedJet.wifiActivity?.awaitsRestart)
+        model.appMovedToBackground()
+        waitUntil("${mine.name} to be let go") { !bedJet.isConnected }
+        return model to bedJet
+    }
+
+    @Test
+    fun anActionIsRefusedWhileTheBedJetInstallsAnUpdate() = onMain {
+        val (model, bedJet) = installingAnUpdate()
+        val listens = unit(mine.id).listens
+        val message = failure { model.perform(AutomationRequest.Air(AirSettings(mode = Mode.HEAT)), bedJet) }
+        assertEquals(AutomationError.Updating.message, message)
+        // It doesn't wait to reach a BedJet that is installing, or offer to go on in Lull.
+        assertEquals(listens, unit(mine.id).listens)
+    }
+
+    @Test
+    fun anActionGoesAheadOnceTheBedJetShouldBeBackFromAnUpdate() = onMain {
+        val (model, bedJet) = installingAnUpdate()
+        // As when Lull wakes for the action long after the install, before its own timer has caught up.
+        val patience = BedJet.restartPatienceMillis
+        BedJet.restartPatienceMillis = 0
+        try {
+            val done = model.perform(AutomationRequest.Air(AirSettings(mode = Mode.HEAT)), bedJet)
+            assertEquals("Turned on Heat on BEDJET_3.", done)
+        } finally {
+            BedJet.restartPatienceMillis = patience
+        }
+    }
+
+    @Test
+    fun theBedJetStaysBusyWhileAnyCommandIsUnderWay() = onMain {
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        unit(mine.id).holdsSends = true
+        val lightRing = async { bedJet.setLED(false) }
+        waitUntil("the light ring to be on its way") { unit(mine.id).isHolding }
+        // An action that sends nothing finishes while the light ring is still on its way, which keeps the BedJet busy.
+        val done = model.perform(AutomationRequest.TurnOff, bedJet)
+        assertEquals("BEDJET_3 is already off.", done)
+        assertTrue(bedJet.isBusy)
+        unit(mine.id).release()
+        lightRing.await()
+        assertFalse(bedJet.isBusy)
+    }
+
+    @Test
+    fun startNightSetToADeletedScheduleSaysSo() = onMain {
+        val (model, bedJet) = backgrounded(mine)
+        val message = failure { model.perform(AutomationRequest.StartNight(UUID.randomUUID().toString()), bedJet) }
+        assertEquals(AutomationError.ForgottenSchedule.message, message)
+    }
+
+    @Test
+    fun anActionSetToAForgottenBedJetSaysSo() = onMain {
+        val (model, bedJet) = backgrounded(mine)
+        model.forget(bedJet)
+        try {
+            model.automationTarget(bedJet.id)
+            fail("A forgotten BedJet should be said to be forgotten")
+        } catch (_: AutomationError.ForgottenBedJet) {
+        }
+        // Lull never picks another in its place.
+        try {
+            model.automationTarget(null)
+            fail("No BedJet should be picked in its place")
+        } catch (_: AutomationError.NoBedJet) {
+        }
+    }
+
+    @Test
+    fun aScheduleNamedByAnAutomationMustPickOutOne() = onMain {
+        val model = launch()
+        model.save(Schedule("Twin", model.schedules[0].phases))
+        model.save(Schedule("Twin", model.schedules[1].phases))
+        try {
+            AutomationCall(AutomationCall.START_NIGHT, schedule = "twin").request(model)
+            fail("Two schedules called Twin should be refused")
+        } catch (error: AutomationFailure) {
+            assertEquals("Lull has more than one schedule called “twin”. Rename one in Lull.", error.message)
+        }
+        val coolDrift = model.schedules.first { it.name == "Cool Drift" }
+        assertEquals(AutomationRequest.StartNight(coolDrift.id), AutomationCall(AutomationCall.START_NIGHT, schedule = "cool drift").request(model))
+    }
+
+    @Test
+    fun aStatusSentToLullsScreenLeavesTheBedJetShown() = onMain {
+        val model = launch()
+        model.choose(mine)
+        model.choose(partners)
+        connected(mine, model)
+        connected(partners, model)
+        assertTrue(model.select(bedJet(mine, model).id))
+        val other = model.title(bedJet(partners, model))
+        runAutomation(model, AutomationCall(AutomationCall.GET_STATUS, bedJet = other), onScreen = true)
+        assertEquals(mine.id, model.bedJet?.unit)
+    }
+
+    @Test
+    fun anActionOffScreenReachesAFreeBedJetAndLetsGo() = onMain {
+        val model = launch()
+        model.choose(mine)
+        connected(mine, model)
+        model.appMovedToBackground()
+
+        fakes.clear()
+        val relaunched = launch(onScreen = false)
+        val target = relaunched.automationTarget(null)
+        val done = relaunched.perform(AutomationRequest.StartNight(null), target)
+        assertEquals("Started “Cool Drift” on BEDJET_3.", done)
+        assertNotNull(target.run)
+        assertTrue(relaunched.status(target).nightRunning)
+        // It never asked another phone for the BedJet, and let go of it once done.
+        assertEquals(0, unit(mine.id).starts)
+        assertEquals(0, unit(mine.id).requests)
+        assertTrue(unit(mine.id).listens > 0)
+        assertTrue(unit(mine.id).stops > 0)
+        assertFalse(target.isConnected)
+        assertNull(relaunched.errorMessage)
+    }
+
+    @Test
+    fun anActionOffScreenGivesUpOnABedJetThatIsntFree() = onMain {
+        val (model, bedJet) = backgrounded(mine)
+        val sentBefore = unit(mine.id).sent.toList()
+        unit(mine.id).answers = false
+        model.reachPatienceMillis = 1_000
+        try {
+            model.perform(AutomationRequest.Air(AirSettings(mode = Mode.HEAT)), bedJet)
+            fail("The action should have asked to go on in Lull")
+        } catch (error: AutomationError.NeedsLull) {
+        }
+        assertEquals(sentBefore, unit(mine.id).sent)
+        assertEquals(0, unit(mine.id).requests)
+        assertNull(model.errorMessage)
+    }
+
+    @Test
+    fun anActionNeverAsksForABedJetBackThatWentToAnotherPhone() = onMain {
+        val (model, bedJet) = backgrounded(mine)
+        val link = unit(mine.id)
+        val sentBefore = link.sent.toList()
+        // Another phone takes the BedJet while the action waits for its first report.
+        link.reports = false
+        val action = async { runCatching { model.perform(AutomationRequest.LightRing(on = true), bedJet) } }
+        waitUntil("the BedJet to connect") { bedJet.isConnected }
+        delay(300)
+        link.heldElsewhere = true
+        link.onStateChange?.invoke(LinkState.YIELDED)
+        link.reports = true
+
+        val result = action.await()
+        assertTrue(result.isFailure)
+        // It reached the BedJet first, so it fails in the wait rather than by finding the BedJet already taken.
+        assertFalse(result.exceptionOrNull() is AutomationError.NeedsLull)
+        assertEquals(sentBefore, link.sent)
+        assertEquals(0, link.requests)
+    }
+
+    @Test
+    fun aCancelledActionStopsWaitingForTheBedJetAtOnce() = onMain {
+        val (model, bedJet) = backgrounded(mine)
+        val link = unit(mine.id)
+        link.reports = false
+        val action = async { model.perform(AutomationRequest.LightRing(on = true), bedJet) }
+        waitUntil("the BedJet to connect") { bedJet.isConnected }
+        delay(300)
+
+        val cancelled = System.currentTimeMillis()
+        action.cancelAndJoin()
+        assertTrue(action.isCancelled)
+        // Not left polling until the wait for the report would have run out.
+        assertTrue(System.currentTimeMillis() - cancelled < 1_000)
+    }
+
+    @Test
+    fun anActionOutOfBackgroundTimeDuringItsCommandSendsNothingMore() = onMain {
+        val (model, bedJet) = backgrounded(mine)
+        val link = unit(mine.id)
+        link.holdsSends = true
+        val action = async { model.perform(AutomationRequest.StartNight(null), bedJet) }
+        waitUntil("tonight to be on its way to the BedJet") { link.isHolding }
+        // Android stops the action's work while the BedJet is being given tonight, which cancels it, as iOS running out of
+        // background time does.
+        action.cancel()
+        // Lull is next opened, the BedJet connects again, and only then does the command in flight finish.
+        model.appBecameActive()
+        waitUntil("the BedJet to connect again") { bedJet.isConnected }
+        link.release()
+
+        action.join()
+        assertTrue(action.isCancelled)
+        // Tonight was never started, long after the automation app gave up on it.
+        assertNull(bedJet.run)
+        assertEquals(0, link.device.programStep)
+    }
+
+    @Test
+    fun anAirActionOutOfBackgroundTimeSendsNothingAfterTheCommandInFlight() = onMain {
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        // The air is on with a time picked on the Remote, so nothing waits between the action's commands.
+        bedJet.setMode(Mode.HEAT)
+        bedJet.setRuntime(minutes = 60)
+        model.appMovedToBackground()
+        waitUntil("${mine.name} to be let go") { !bedJet.isConnected }
+        val link = unit(mine.id)
+        link.holdsSends = true
+        val action = async { model.perform(AutomationRequest.Air(AirSettings(degrees = 30, fanPercent = 60)), bedJet) }
+        waitUntil("the temperature to be on its way to the BedJet") { link.isHolding }
+        val sent = link.sent.size
+        // Android stops the action's work while the temperature is on its way, which cancels it, as iOS running out of
+        // background time does.
+        action.cancel()
+        // Lull is next opened, the BedJet connects again, and only then does the command in flight finish.
+        model.appBecameActive()
+        waitUntil("the BedJet to connect again") { bedJet.isConnected }
+        link.release()
+
+        action.join()
+        assertTrue(action.isCancelled)
+        // Android drops the command in flight as it's cancelled, where iOS lets it finish. Either way the fan never went
+        // out, long after the automation app gave up on it.
+        assertEquals(sent, link.sent.size)
+        assertNotEquals(60, link.lastStatus?.fanPercent)
+    }
+
+    @Test
+    fun comingOnScreenDuringAnActionKeepsTheBedJet() = onMain {
+        val (model, bedJet) = backgrounded(mine)
+        val stopsBefore = unit(mine.id).stops
+        unit(mine.id).holdsSends = true
+        val action = async { model.perform(AutomationRequest.LightRing(on = false), bedJet) }
+        waitUntil("the action to be in flight") { unit(mine.id).isHolding }
+        model.appBecameActive()
+        unit(mine.id).release()
+        assertEquals("Turned off the light ring on BEDJET_3.", action.await())
+        assertTrue(bedJet.isConnected)
+        assertEquals(stopsBefore, unit(mine.id).stops)
+    }
+
+    @Test
+    fun startNightLeavesARunningNightAlone() = onMain {
+        val model = launch()
+        model.choose(mine)
+        val first = connected(mine, model)
+        first.startTonight()
+        model.appMovedToBackground()
+
+        val sentBefore = unit(mine.id).sent.toList()
+        val done = model.perform(AutomationRequest.StartNight(model.schedules[2].id), first)
+        assertEquals("“Cool Drift” is already running on BEDJET_3.", done)
+        assertEquals(sentBefore, unit(mine.id).sent)
+        assertEquals("Cool Drift", first.run?.schedule?.name)
+    }
+
+    @Test
+    fun fullSlotsAreAnErrorForAnAction() = onMain {
+        val theirs = StoredProgram("Theirs", listOf(ProgramStep(Mode.COOL, fanStep = 7, temperature = 40, hours = 2, minutes = 0)))
+        setups[mine.id] = { it.device = DemoLink("BEDJET_3", listOf(theirs, theirs, theirs), units) }
+        val (model, bedJet) = backgrounded(mine)
+        val message = failure { model.perform(AutomationRequest.StartNight(null), bedJet) }
+        assertEquals(AutomationError.SlotsFull.message, message)
+        // Nobody is there to pick a slot, so none is asked for or replaced.
+        assertFalse(bedJet.needsSlotChoice)
+        assertNull(bedJet.run)
+        assertEquals(listOf(theirs, theirs, theirs), unit(mine.id).device.slots)
+        assertNull(model.errorMessage)
+    }
+
+    @Test
+    fun fullSlotsAreAskedAboutOnceAnActionGoesOnInLull() = onMain {
+        val theirs = StoredProgram("Theirs", listOf(ProgramStep(Mode.COOL, fanStep = 7, temperature = 40, hours = 2, minutes = 0)))
+        setups[mine.id] = { it.device = DemoLink("BEDJET_3", listOf(theirs, theirs, theirs), units) }
+        val (model, bedJet) = backgrounded(mine)
+        val done = model.perform(AutomationRequest.StartNight(null), bedJet, mayAsk = true)
+        assertEquals("Your BedJet's three slots are full. Pick one to reuse in Lull.", done)
+        assertTrue(bedJet.needsSlotChoice)
+        assertNull(bedJet.run)
+    }
+
+    @Test
+    fun actionsOneAfterAnotherEachReachTheBedJet() = onMain {
+        val (model, bedJet) = backgrounded(mine)
+        // Over Bluetooth, the connection one action lets go of takes a moment to drop, while the next starts at once.
+        unit(mine.id).dropsSlowly = true
+        model.perform(AutomationRequest.Air(AirSettings(mode = Mode.HEAT)), bedJet)
+        val fan = model.perform(AutomationRequest.Air(AirSettings(fanPercent = 70)), bedJet)
+        assertEquals("Set the fan on BEDJET_3 to 70%.", fan)
+        val runTime = model.perform(AutomationRequest.Air(AirSettings(minutes = 55)), bedJet)
+        assertEquals("BEDJET_3 turns off in 55 min.", runTime)
+        assertTrue(unit(mine.id).sent.contains(Codec.setFan(13).toList()))
+    }
+
+    @Test
+    fun turnOffEndsTheNightOrStopsTheAir() = onMain {
+        val (model, bedJet) = backgrounded(mine)
+        model.perform(AutomationRequest.StartNight(null), bedJet)
+        assertEquals("Ended “Cool Drift” on BEDJET_3.", model.perform(AutomationRequest.TurnOff, bedJet))
+        assertNull(bedJet.run)
+        assertEquals("BEDJET_3 is already off.", model.perform(AutomationRequest.TurnOff, bedJet))
+        val airOff = failure { model.perform(AutomationRequest.Air(AirSettings(fanPercent = 50)), bedJet) }
+        assertEquals(AutomationError.AirOff.message, airOff)
+
+        assertEquals("Turned on Cool on BEDJET_3.", model.perform(AutomationRequest.Air(AirSettings(mode = Mode.COOL)), bedJet))
+        assertEquals("Set the fan on BEDJET_3 to 50%.", model.perform(AutomationRequest.Air(AirSettings(fanPercent = 52)), bedJet))
+        assertTrue(Codec.setFan(9).toList() in unit(mine.id).sent)
+        assertEquals("Turned off BEDJET_3.", model.perform(AutomationRequest.TurnOff, bedJet))
+        assertTrue(Codec.setMode(Mode.STANDBY)!!.toList() in unit(mine.id).sent)
+        assertNull(model.errorMessage)
+    }
+
+    @Test
+    fun aV2RefusesAModeItCantRunFromAnAction() = onMain {
+        setups[mine.id] = { it.generation = Generation.V2 }
+        val (model, bedJet) = backgrounded(mine)
+        val sentBefore = unit(mine.id).sent.toList()
+        val message = failure { model.perform(AutomationRequest.Air(AirSettings(mode = Mode.DRY)), bedJet) }
+        assertEquals("BEDJET_3 is a BedJet V2, which can't run Dry.", message)
+        assertEquals(sentBefore, unit(mine.id).sent)
+    }
+
+    @Test
+    fun turnOnRunsAsLongAsAllowedRatherThanToATimePickedEarlier() = onMain {
+        val model = launch()
+        model.remoteTimerShowsTime = true
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        bedJet.setMode(Mode.COOL)
+        bedJet.setRuntime(untilMillis = System.currentTimeMillis() + 30 * 60_000L)
+        assertTrue(bedJet.remoteTimer.isAhead)
+        model.appMovedToBackground()
+        waitUntil("${mine.name} to be let go") { !bedJet.isConnected }
+
+        model.perform(AutomationRequest.Air(AirSettings(mode = Mode.HEAT)), bedJet)
+        assertEquals(RemoteTimer.Longest, bedJet.remoteTimer)
+    }
+
+    @Test
+    fun theRunTimeIsLeftToARunningSchedule() = onMain {
+        val (model, bedJet) = backgrounded(mine)
+        model.perform(AutomationRequest.StartNight(null), bedJet)
+        val sentBefore = unit(mine.id).sent.toList()
+        val message = failure { model.perform(AutomationRequest.Air(AirSettings(minutes = 30)), bedJet) }
+        assertEquals(AutomationError.ScheduleSetsTiming.message, message)
+        assertEquals(sentBefore, unit(mine.id).sent)
+        assertNotNull(bedJet.run)
+        assertNull(model.errorMessage)
     }
 }

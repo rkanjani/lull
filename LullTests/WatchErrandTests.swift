@@ -374,4 +374,25 @@ final class WatchErrandTests: XCTestCase {
         link.release()
         await change.value
     }
+
+    func testANightThatEndedIsNotedWhenAnActionFromShortcutsFindsIt() async throws {
+        // Started from this phone an hour ago, and ended early by the BedJet since.
+        let night = ActiveRun(schedule: AppModel.startingSchedules[0], startedAt: Date().addingTimeInterval(-3600))
+        try save(SavedBedJet(unit: mine.id, name: mine.name, generation: .v3, run: night))
+        let model = launch(onScreen: false)
+        let bedJet = try XCTUnwrap(model.bedJet)
+        // As over Bluetooth, the BedJet says what it's doing a moment after it connects, once the action waits to hear it.
+        // That wait isn't a command under way, so the early end is recorded and said, as for an errand.
+        let link = unit(mine.id)
+        link.reports = false
+        let action = Task { try await model.perform(.lightRing(on: true), on: bedJet) }
+        try await waitUntil("the BedJet to connect") { bedJet.isConnected }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        link.reports = true
+
+        _ = try await action.value
+        XCTAssertNil(bedJet.run)
+        XCTAssertTrue(bedJet.history.contains { if case .scheduleEnded = $0.event { true } else { false } })
+        XCTAssertTrue(model.errorMessage?.hasPrefix("Your BedJet turned off") == true)
+    }
 }

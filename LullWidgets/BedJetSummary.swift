@@ -130,7 +130,7 @@ struct StartButton: View {
     let bedJet: WidgetBedJet
 
     var body: some View {
-        Button(intent: StartNightIntent(bedJet: BedJetEntity(id: bedJet.id, name: bedJet.name))) {
+        Button(intent: StartNightInLullIntent(bedJet: BedJetEntity(id: bedJet.id, name: bedJet.name))) {
             Text("Start")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.black)

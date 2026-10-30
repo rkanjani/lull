@@ -9,6 +9,8 @@ import com.rohankanjani.lull.bedjetkit.LinkState
 import com.rohankanjani.lull.bedjetkit.takes
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * A BedJet for tests. It speaks like the simulated one, but connects only when allowed, records every command,
@@ -28,11 +30,24 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
     var holdsSends = false
     /** Off, the unit takes commands but its reports never arrive, as when Lull lets go of it first. */
     var reports = true
+    /**
+     * On, letting go takes a moment, as over Bluetooth: the link still says it's ready until the connection drops, but
+     * nothing sent on it arrives, and asking for the unit meanwhile connects once it has dropped.
+     */
+    var dropsSlowly = false
+    private var isDropping = false
+    private var connectsAfterDrop = false
     val sent = mutableListOf<List<Byte>>()
     var stops = 0
         private set
+    /** How often Lull asked for the unit, which over Bluetooth asks another phone to hand it over too. */
+    var starts = 0
+        private set
     /** How many times another phone was asked to hand the BedJet over. */
     var requests = 0
+        private set
+    /** How often Lull connected only if the unit was free. */
+    var listens = 0
         private set
     private val held = mutableListOf<CompletableDeferred<Unit>>()
     val isHolding: Boolean get() = held.isNotEmpty()
@@ -53,8 +68,22 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
     }
 
     override fun start() {
+        starts += 1
+        connect()
+    }
+
+    override fun listen() {
+        listens += 1
+        connect()
+    }
+
+    private fun connect() {
         if (heldElsewhere) {
             onStateChange?.invoke(LinkState.YIELDED)
+            return
+        }
+        if (isDropping) {
+            connectsAfterDrop = true
             return
         }
         device.answers = answers
@@ -63,24 +92,34 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
 
     override fun stop() {
         stops += 1
-        device.stop()
+        connectsAfterDrop = false
+        if (!dropsSlowly || state != LinkState.READY) return device.stop()
+        isDropping = true
+        scope.launch {
+            delay(300)
+            isDropping = false
+            device.stop()
+            if (connectsAfterDrop) connect()
+        }
     }
+
+    override suspend fun writeWiFi(network: ByteArray, password: ByteArray) = device.writeWiFi(network, password)
 
     override fun requestControl() {
         requests += 1
         heldElsewhere = false
-        start()
+        connect()
     }
 
     override suspend fun send(command: ByteArray) {
         if (holdsSends) CompletableDeferred<Unit>().also { held += it }.await()
-        if (state != LinkState.READY) throw BedJetError.NotConnected
+        if (state != LinkState.READY || isDropping) throw BedJetError.NotConnected
         sent += command.toList()
         device.send(command)
     }
 
     override suspend fun query(request: Int): ByteArray {
-        if (state != LinkState.READY) throw BedJetError.NotConnected
+        if (state != LinkState.READY || isDropping) throw BedJetError.NotConnected
         return device.query(request)
     }
 

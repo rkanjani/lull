@@ -38,10 +38,11 @@ final class DeviceSelectionTests: XCTestCase {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    private func launch(demo: Bool = false) -> AppModel {
+    /// Lull launched by the person, on screen. Off screen is a launch to run an action or list BedJets in Shortcuts.
+    private func launch(demo: Bool = false, onScreen: Bool = true) -> AppModel {
         AppModel(storage: Storage(directory: directory, defaults: defaults), demoMode: demo,
                  makeLink: { [unowned self] bedJet in self.unit(bedJet.unit!) },
-                 discovery: { [unowned self] _ in self.discovery })
+                 discovery: { [unowned self] _ in self.discovery }, onScreen: onScreen)
     }
 
     private func unit(_ id: UUID) -> FakeLink {
@@ -835,5 +836,375 @@ final class DeviceSelectionTests: XCTestCase {
         XCTAssertEqual(unit(mine.id).sent, sent)
         XCTAssertEqual(model.bedJet?.id, first.id)
         XCTAssertFalse(unit(partners.id).sent.contains(try XCTUnwrap(Codec.setMode(.cool))))
+    }
+
+    // MARK: Actions from Shortcuts
+
+    /// Lull in the background with a BedJet it was using, as when an automation runs at bedtime.
+    private func backgrounded(_ unit: NearbyBedJet) async throws -> (AppModel, BedJet) {
+        let model = launch()
+        model.choose(unit)
+        let bedJet = try await connected(unit, in: model)
+        model.appMovedToBackground()
+        try await waitUntil("\(unit.name) to be let go") { !bedJet.isConnected }
+        return (model, bedJet)
+    }
+
+    private func failure(_ action: () async throws -> String) async -> String? {
+        do {
+            _ = try await action()
+            XCTFail("The action should have failed")
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    func testALaunchOffScreenConnectsToNothing() async throws {
+        let model = launch()
+        model.choose(mine)
+        _ = try await connected(mine, in: model)
+        model.appMovedToBackground()
+
+        units = [:]
+        let relaunched = launch(onScreen: false)
+        XCTAssertEqual(relaunched.bedJet?.unit, mine.id)
+        XCTAssertFalse(relaunched.status(of: try XCTUnwrap(relaunched.bedJet)).nightRunning)
+        // Its link is set up for later, but nothing connects, and no other phone is asked for the BedJet.
+        XCTAssertEqual(unit(mine.id).starts + unit(mine.id).listens + unit(mine.id).requests, 0)
+    }
+
+    func testAnActionWaitsOutTheBedJetsWiFi() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        let joining = Task { await bedJet.joinWiFi(network: "Home", password: "password1") }
+        try await waitUntil("the BedJet to start on its Wi-Fi") { bedJet.wifiActivity?.isRunning == true }
+        let message = await failure { try await model.perform(.lightRing(on: false), on: bedJet) }
+        XCTAssertEqual(message, AutomationError.updating.errorDescription)
+        await joining.value
+        XCTAssertEqual(bedJet.wifiActivity?.failed, false)
+    }
+
+    /// Lull in the background with a BedJet that began installing an update, as after updating it at bedtime.
+    private func installingAnUpdate() async throws -> (AppModel, BedJet) {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        await bedJet.joinWiFi(network: "Home", password: "password1")
+        unit(mine.id).device.offerFirmwareUpdate()
+        await bedJet.updateFirmware()
+        XCTAssertEqual(bedJet.wifiActivity?.awaitsRestart, true)
+        model.appMovedToBackground()
+        try await waitUntil("\(mine.name) to be let go") { !bedJet.isConnected }
+        return (model, bedJet)
+    }
+
+    func testAnActionIsRefusedWhileTheBedJetInstallsAnUpdate() async throws {
+        let (model, bedJet) = try await installingAnUpdate()
+        let listens = unit(mine.id).listens
+        let message = await failure { try await model.perform(.air(AirSettings(mode: .heat)), on: bedJet) }
+        XCTAssertEqual(message, AutomationError.updating.errorDescription)
+        // It doesn't wait to reach a BedJet that is installing, or offer to go on in Lull.
+        XCTAssertEqual(unit(mine.id).listens, listens)
+    }
+
+    func testAnActionGoesAheadOnceTheBedJetShouldBeBackFromAnUpdate() async throws {
+        let (model, bedJet) = try await installingAnUpdate()
+        // As when Lull wakes for the action long after the install, before its own timer has caught up.
+        let patience = BedJet.restartPatience
+        BedJet.restartPatience = 0
+        defer { BedJet.restartPatience = patience }
+        let done = try await model.perform(.air(AirSettings(mode: .heat)), on: bedJet)
+        XCTAssertEqual(done, "Turned on Heat on BEDJET_3.")
+    }
+
+    func testTheBedJetStaysBusyWhileAnyCommandIsUnderWay() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        unit(mine.id).holdsSends = true
+        let lightRing = Task { await bedJet.setLED(false) }
+        try await waitUntil("the light ring to be on its way") { unit(mine.id).isHolding }
+        // An action that sends nothing finishes while the light ring is still on its way, which keeps the BedJet busy.
+        let done = try await model.perform(.turnOff, on: bedJet)
+        XCTAssertEqual(done, "BEDJET_3 is already off.")
+        XCTAssertTrue(bedJet.isBusy)
+        unit(mine.id).release()
+        await lightRing.value
+        XCTAssertFalse(bedJet.isBusy)
+    }
+
+    func testStartNightSetToADeletedScheduleSaysSo() async throws {
+        let (model, bedJet) = try await backgrounded(mine)
+        let message = await failure { try await model.perform(.startNight(schedule: UUID()), on: bedJet) }
+        XCTAssertEqual(message, AutomationError.forgottenSchedule.errorDescription)
+    }
+
+    func testAnActionSetToAForgottenBedJetSaysSo() async throws {
+        let (model, bedJet) = try await backgrounded(mine)
+        model.forget(bedJet)
+        XCTAssertThrowsError(try model.automationTarget(bedJet.id)) { error in
+            XCTAssertEqual(error as? AutomationError, .forgottenBedJet)
+        }
+        // Lull never picks another in its place.
+        XCTAssertThrowsError(try model.automationTarget(nil)) { error in
+            XCTAssertEqual(error as? AutomationError, .noBedJet)
+        }
+    }
+
+    func testAnActionOffScreenReachesAFreeBedJetAndLetsGo() async throws {
+        let model = launch()
+        model.choose(mine)
+        _ = try await connected(mine, in: model)
+        model.appMovedToBackground()
+
+        units = [:]
+        let relaunched = launch(onScreen: false)
+        let target = try relaunched.automationTarget(nil)
+        let done = try await relaunched.perform(.startNight(schedule: nil), on: target)
+        XCTAssertEqual(done, "Started “Cool Drift” on BEDJET_3.")
+        XCTAssertNotNil(target.run)
+        XCTAssertTrue(relaunched.status(of: target).nightRunning)
+        // It never asked another phone for the BedJet, and let go of it once done.
+        XCTAssertEqual(unit(mine.id).starts, 0)
+        XCTAssertEqual(unit(mine.id).requests, 0)
+        XCTAssertGreaterThan(unit(mine.id).listens, 0)
+        XCTAssertGreaterThan(unit(mine.id).stops, 0)
+        XCTAssertFalse(target.isConnected)
+        XCTAssertNil(relaunched.errorMessage)
+    }
+
+    func testAnActionOffScreenGivesUpOnABedJetThatIsntFree() async throws {
+        let (model, bedJet) = try await backgrounded(mine)
+        let sentBefore = unit(mine.id).sent
+        unit(mine.id).answers = false
+        model.reachPatience = 1
+        do {
+            _ = try await model.perform(.air(AirSettings(mode: .heat)), on: bedJet)
+            XCTFail("The action should have asked to go on in Lull")
+        } catch {
+            XCTAssertEqual(error as? AutomationError, .needsLull)
+        }
+        XCTAssertEqual(unit(mine.id).sent, sentBefore)
+        XCTAssertEqual(unit(mine.id).requests, 0)
+        XCTAssertNil(model.errorMessage)
+    }
+
+    func testAnActionNeverAsksForABedJetBackThatWentToAnotherPhone() async throws {
+        let (model, bedJet) = try await backgrounded(mine)
+        let link = unit(mine.id)
+        let sentBefore = link.sent
+        // Another phone takes the BedJet while the action waits for its first report.
+        link.reports = false
+        let action = Task { try await model.perform(.lightRing(on: true), on: bedJet) }
+        try await waitUntil("the BedJet to connect") { bedJet.isConnected }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        link.heldElsewhere = true
+        link.onStateChange?(.yielded)
+        link.reports = true
+
+        let message = await failure { try await action.value }
+        XCTAssertNotNil(message)
+        // It reached the BedJet first, so it fails in the wait rather than by finding the BedJet already taken.
+        XCTAssertNotEqual(message, AutomationError.needsLull.errorDescription)
+        XCTAssertEqual(link.sent, sentBefore)
+        XCTAssertEqual(link.requests, 0)
+    }
+
+    func testACancelledActionStopsWaitingForTheBedJetAtOnce() async throws {
+        let (model, bedJet) = try await backgrounded(mine)
+        let link = unit(mine.id)
+        link.reports = false
+        let action = Task { try await model.perform(.lightRing(on: true), on: bedJet) }
+        try await waitUntil("the BedJet to connect") { bedJet.isConnected }
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        let cancelled = Date()
+        action.cancel()
+        do {
+            _ = try await action.value
+            XCTFail("The action should have been cancelled")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+        // Not left polling until the wait for the report would have run out.
+        XCTAssertLessThan(Date().timeIntervalSince(cancelled), 1)
+    }
+
+    func testAnActionOutOfBackgroundTimeDuringItsCommandSendsNothingMore() async throws {
+        let (model, bedJet) = try await backgrounded(mine)
+        let link = unit(mine.id)
+        link.holdsSends = true
+        let action = Task { try await model.perform(.startNight(schedule: nil), on: bedJet) }
+        try await waitUntil("tonight to be on its way to the BedJet") { link.isHolding }
+        // iOS runs out of background time while the BedJet is being given tonight.
+        BackgroundTime.runOut()
+        // Lull is next opened, the BedJet connects again, and only then does the command in flight finish.
+        model.appBecameActive()
+        try await waitUntil("the BedJet to connect again") { bedJet.isConnected }
+        link.release()
+
+        do {
+            _ = try await action.value
+            XCTFail("The action should have been cancelled")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+        // Tonight was never started, long after Shortcuts gave up on it.
+        XCTAssertNil(bedJet.run)
+        XCTAssertEqual(link.device.programStep, 0)
+    }
+
+    func testAnAirActionOutOfBackgroundTimeSendsNothingAfterTheCommandInFlight() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        // The air is on with a time picked on the Remote, so nothing waits between the action's commands.
+        await bedJet.setMode(.heat)
+        await bedJet.setRuntime(minutes: 60)
+        model.appMovedToBackground()
+        try await waitUntil("\(mine.name) to be let go") { !bedJet.isConnected }
+        let link = unit(mine.id)
+        link.holdsSends = true
+        let action = Task { try await model.perform(.air(AirSettings(degrees: 30, fanPercent: 60)), on: bedJet) }
+        try await waitUntil("the temperature to be on its way to the BedJet") { link.isHolding }
+        let sent = link.sent.count
+        // iOS runs out of background time while the temperature is on its way.
+        BackgroundTime.runOut()
+        // Lull is next opened, the BedJet connects again, and only then does the command in flight finish.
+        model.appBecameActive()
+        try await waitUntil("the BedJet to connect again") { bedJet.isConnected }
+        link.release()
+
+        do {
+            _ = try await action.value
+            XCTFail("The action should have been cancelled")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+        // Only the temperature in flight went out: the fan never did, long after Shortcuts gave up on it.
+        XCTAssertEqual(link.sent.count, sent + 1)
+        XCTAssertNotEqual(link.lastStatus?.fanPercent, 60)
+    }
+
+    func testComingOnScreenDuringAnActionKeepsTheBedJet() async throws {
+        let (model, bedJet) = try await backgrounded(mine)
+        let stopsBefore = unit(mine.id).stops
+        unit(mine.id).holdsSends = true
+        let action = Task { try await model.perform(.lightRing(on: false), on: bedJet) }
+        try await waitUntil("the action to be in flight") { unit(mine.id).isHolding }
+        model.appBecameActive()
+        unit(mine.id).release()
+        let done = try await action.value
+        XCTAssertEqual(done, "Turned off the light ring on BEDJET_3.")
+        XCTAssertTrue(bedJet.isConnected)
+        XCTAssertEqual(unit(mine.id).stops, stopsBefore)
+    }
+
+    func testStartNightLeavesARunningNightAlone() async throws {
+        let model = launch()
+        model.choose(mine)
+        let first = try await connected(mine, in: model)
+        await first.startTonight()
+        model.appMovedToBackground()
+
+        let sentBefore = unit(mine.id).sent
+        let done = try await model.perform(.startNight(schedule: model.schedules[2].id), on: first)
+        XCTAssertEqual(done, "“Cool Drift” is already running on BEDJET_3.")
+        XCTAssertEqual(unit(mine.id).sent, sentBefore)
+        XCTAssertEqual(first.run?.schedule.name, "Cool Drift")
+    }
+
+    func testFullSlotsAreAnErrorForAnAction() async throws {
+        let theirs = StoredProgram(name: "Theirs", steps: [ProgramStep(mode: .cool, fanStep: 7, temperature: 40, hours: 2, minutes: 0)])
+        setups[mine.id] = { $0.device = DemoLink(name: "BEDJET_3", slots: [theirs, theirs, theirs]) }
+        let (model, bedJet) = try await backgrounded(mine)
+        let message = await failure { try await model.perform(.startNight(schedule: nil), on: bedJet) }
+        XCTAssertEqual(message, AutomationError.slotsFull.errorDescription)
+        // Nobody is there to pick a slot, so none is asked for or replaced.
+        XCTAssertFalse(bedJet.needsSlotChoice)
+        XCTAssertNil(bedJet.run)
+        XCTAssertEqual(unit(mine.id).device.slots, [theirs, theirs, theirs])
+        XCTAssertNil(model.errorMessage)
+    }
+
+    func testFullSlotsAreAskedAboutOnceAnActionGoesOnInLull() async throws {
+        let theirs = StoredProgram(name: "Theirs", steps: [ProgramStep(mode: .cool, fanStep: 7, temperature: 40, hours: 2, minutes: 0)])
+        setups[mine.id] = { $0.device = DemoLink(name: "BEDJET_3", slots: [theirs, theirs, theirs]) }
+        let (model, bedJet) = try await backgrounded(mine)
+        let done = try await model.perform(.startNight(schedule: nil), on: bedJet, mayAsk: true)
+        XCTAssertEqual(done, "Your BedJet's three slots are full. Pick one to reuse in Lull.")
+        XCTAssertTrue(bedJet.needsSlotChoice)
+        XCTAssertNil(bedJet.run)
+    }
+
+    func testActionsOneAfterAnotherEachReachTheBedJet() async throws {
+        let (model, bedJet) = try await backgrounded(mine)
+        // Over Bluetooth, the connection one action lets go of takes a moment to drop, while the next starts at once.
+        unit(mine.id).dropsSlowly = true
+        _ = try await model.perform(.air(AirSettings(mode: .heat)), on: bedJet)
+        let fan = try await model.perform(.air(AirSettings(fanPercent: 70)), on: bedJet)
+        XCTAssertEqual(fan, "Set the fan on BEDJET_3 to 70%.")
+        let runTime = try await model.perform(.air(AirSettings(minutes: 55)), on: bedJet)
+        XCTAssertEqual(runTime, "BEDJET_3 turns off in 55 min.")
+        XCTAssertTrue(unit(mine.id).sent.contains(Codec.setFan(step: 13)))
+    }
+
+    func testTurnOffEndsTheNightOrStopsTheAir() async throws {
+        let (model, bedJet) = try await backgrounded(mine)
+        _ = try await model.perform(.startNight(schedule: nil), on: bedJet)
+        var done = try await model.perform(.turnOff, on: bedJet)
+        XCTAssertEqual(done, "Ended “Cool Drift” on BEDJET_3.")
+        XCTAssertNil(bedJet.run)
+        done = try await model.perform(.turnOff, on: bedJet)
+        XCTAssertEqual(done, "BEDJET_3 is already off.")
+        let airOff = await failure { try await model.perform(.air(AirSettings(fanPercent: 50)), on: bedJet) }
+        XCTAssertEqual(airOff, AutomationError.airOff.errorDescription)
+
+        done = try await model.perform(.air(AirSettings(mode: .cool)), on: bedJet)
+        XCTAssertEqual(done, "Turned on Cool on BEDJET_3.")
+        done = try await model.perform(.air(AirSettings(fanPercent: 52)), on: bedJet)
+        XCTAssertEqual(done, "Set the fan on BEDJET_3 to 50%.")
+        XCTAssertTrue(unit(mine.id).sent.contains(Codec.setFan(step: 9)))
+        done = try await model.perform(.turnOff, on: bedJet)
+        XCTAssertEqual(done, "Turned off BEDJET_3.")
+        XCTAssertTrue(unit(mine.id).sent.contains(try XCTUnwrap(Codec.setMode(.standby))))
+        XCTAssertNil(model.errorMessage)
+    }
+
+    func testAV2RefusesAModeItCantRunFromAnAction() async throws {
+        setups[mine.id] = { $0.generation = .v2 }
+        let (model, bedJet) = try await backgrounded(mine)
+        let sentBefore = unit(mine.id).sent
+        let message = await failure { try await model.perform(.air(AirSettings(mode: .dry)), on: bedJet) }
+        XCTAssertEqual(message, "BEDJET_3 is a BedJet V2, which can't run Dry.")
+        XCTAssertEqual(unit(mine.id).sent, sentBefore)
+    }
+
+    func testTurnOnRunsAsLongAsAllowedRatherThanToATimePickedEarlier() async throws {
+        let model = launch()
+        model.remoteTimerShowsTime = true
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        await bedJet.setMode(.cool)
+        await bedJet.setRuntime(until: Date().addingTimeInterval(30 * 60))
+        XCTAssertTrue(bedJet.remoteTimer.isAhead)
+        model.appMovedToBackground()
+        try await waitUntil("\(mine.name) to be let go") { !bedJet.isConnected }
+
+        _ = try await model.perform(.air(AirSettings(mode: .heat)), on: bedJet)
+        XCTAssertEqual(bedJet.remoteTimer, .longest)
+    }
+
+    func testTheRunTimeIsLeftToARunningSchedule() async throws {
+        let (model, bedJet) = try await backgrounded(mine)
+        _ = try await model.perform(.startNight(schedule: nil), on: bedJet)
+        let sentBefore = unit(mine.id).sent
+        let message = await failure { try await model.perform(.air(AirSettings(minutes: 30)), on: bedJet) }
+        XCTAssertEqual(message, AutomationError.scheduleSetsTiming.errorDescription)
+        XCTAssertEqual(unit(mine.id).sent, sentBefore)
+        XCTAssertNotNil(bedJet.run)
+        XCTAssertNil(model.errorMessage)
     }
 }

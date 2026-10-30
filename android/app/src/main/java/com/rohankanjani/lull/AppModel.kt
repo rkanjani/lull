@@ -266,7 +266,7 @@ class AppModel(
     }
 
     fun report(message: String, from: BedJet) {
-        val message = if (hasSeveralBedJets) "${title(from)}: $message" else message
+        val message = attributed(message, from)
         // Off screen, an alert would wait for the next time Lull is opened; the watch says it now instead. A refresh,
         // which nothing answers, leaves it for then.
         if (from.id in errands) {
@@ -275,6 +275,9 @@ class AppModel(
         }
         errorMessage = message
     }
+
+    /** A message about one BedJet, saying which when there are several. */
+    fun attributed(message: String, to: BedJet): String = if (hasSeveralBedJets) "${title(to)}: $message" else message
 
     fun appMovedToBackground() {
         isOnScreen = false
@@ -451,6 +454,37 @@ class AppModel(
     private fun endRefresh(bedJet: BedJet) {
         if (errands[bedJet.id] == 1) errandReports[bedJet.id]?.let { errorMessage = it }
         endErrand(bedJet)
+    }
+
+    // Automations
+
+    /** How long an automation waits off screen for a BedJet that isn't answering before asking to go on in Lull. */
+    var reachPatienceMillis = 10_000L
+
+    /**
+     * Runs an automation on a BedJet. Off screen it is held, like an errand from the watch, only for the action and let
+     * go once it's done, unless Lull came on screen meanwhile and holds it as usual. Nobody may be watching an
+     * automation, so it only reaches a BedJet that is free; `mayAsk`, for an action sent to Lull's screen, asks another
+     * phone for it too.
+     */
+    suspend fun <T> reaching(bedJet: BedJet, mayAsk: Boolean, work: suspend () -> T): T {
+        beginErrand(bedJet)
+        try {
+            if (!isOnScreen) {
+                bedJet.waitUntilLetGo(reachPatienceMillis)
+                if (mayAsk) bedJet.resume(asking = true) else bedJet.reachIfFree(reachPatienceMillis)
+            }
+            // Forgotten while the action waited for it, the BedJet is no longer this phone's to set.
+            if (!uses(bedJet)) throw AutomationError.ForgottenBedJet
+            return work()
+        } finally {
+            // An action throws what goes wrong with it. Anything else said off screen meanwhile, such as the BedJet having
+            // turned off early, waits for Lull to be opened, as it would without the action, rather than going with the
+            // errand. On screen it was shown already. While an errand from the watch also holds the BedJet, that is the
+            // watch's to say.
+            if (!isOnScreen && errands[bedJet.id] == 1) errandReports[bedJet.id]?.let { errorMessage = it }
+            endErrand(bedJet)
+        }
     }
 
     /** Bluetooth access was just granted or refused; look at the radio again. */

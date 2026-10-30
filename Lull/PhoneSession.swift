@@ -1,6 +1,5 @@
 import BedJetKit
 import Foundation
-import UIKit
 import WatchConnectivity
 
 /// Lull on the phone, as the watch sees it. The watch has no Bluetooth link of its own to the BedJet, so this hands it
@@ -50,7 +49,7 @@ final class PhoneSession: NSObject {
         // cancelled and lets go of its BedJet, as Android's is when its work is stopped, so nothing it was partway
         // through goes on whenever Lull next runs, which could be hours later.
         let errand = Task { await model.runErrand(command) }
-        let background = BackgroundTask(named: "Errand from the watch") { [weak model] in
+        let background = BackgroundTime("Errand from the watch") { [weak model] in
             errand.cancel()
             model?.letGoOfErrands()
         }
@@ -121,29 +120,5 @@ private struct ComplicationsShow: Equatable {
         names = snapshot.bedJets.map(\.name)
         nights = snapshot.bedJets.map { bedJet in if case let .night(run)? = bedJet.live { run } else { nil } }
         tonight = snapshot.bedJets.map(\.tonight)
-    }
-}
-
-/// Keeps Lull running in the background for a while: until it's ended, or iOS says time's up, whichever comes first.
-/// Should the time run out first, `onExpiry` lets go of what the work holds, so no BedJet is left held by a phone iOS is
-/// about to suspend.
-@MainActor
-private final class BackgroundTask {
-    private var id = UIBackgroundTaskIdentifier.invalid
-
-    init(named name: String, onExpiry: @escaping @MainActor () -> Void) {
-        id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
-            // iOS calls this on the main thread.
-            MainActor.assumeIsolated {
-                onExpiry()
-                self?.end()
-            }
-        }
-    }
-
-    func end() {
-        guard id != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(id)
-        id = .invalid
     }
 }
