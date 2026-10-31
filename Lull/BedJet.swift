@@ -14,6 +14,9 @@ struct SavedBedJet: Codable {
     var tonightID: Schedule.ID?
     var run: ActiveRun?
     var slot: Int?
+    /// How the Remote's timer was left, so a time picked there survives Lull being closed while the air runs.
+    var longestEnds: Date?
+    var timerEnds: Date?
 }
 
 /// One BedJet Lull knows: its connection, what it reports, the schedule running on it and what it did.
@@ -34,6 +37,8 @@ final class BedJet: Identifiable {
     }
     private(set) var linkState: LinkState = .searching
     private(set) var status: DeviceStatus?
+    /// When `status` arrived. It is kept while another phone has the BedJet or Lull is off screen, so it ages.
+    private var statusReceivedAt: Date?
     private(set) var firmware: String?
     /// The kind of BedJet, kept so schedules can be edited for it while it is away. Nil until it has said.
     private(set) var knownGeneration: Generation?
@@ -61,7 +66,13 @@ final class BedJet: Identifiable {
     @ObservationIgnored private weak var app: AppModel?
     private var link: BedJetLink?
     private var lastRefresh = Date.distantPast
-    private var keepsLongestRuntime = true
+    /// When the longest run Lull gave the air from the Remote ends. Changing the temperature or fan keeps to it, and
+    /// picking a time clears it, so the timer then counts down as it is.
+    private var longestEnds: Date? { didSet { app?.save() } }
+    /// When the BedJet's timer, as Lull last left it, runs out. A timer that no longer ends then was changed from
+    /// another phone or the BedJet's own remote.
+    private var timerEnds: Date? { didSet { app?.save() } }
+    private var timePickedAt = Date.distantPast
     private var searchTimer: Task<Void, Never>?
     /// What the history last recorded the BedJet doing, kept across launches to notice what changed while Lull was closed.
     private var lastSeen: Seen?
@@ -72,7 +83,8 @@ final class BedJet: Identifiable {
     private var lastCommandAt = Date.distantPast
 
     var saved: SavedBedJet {
-        SavedBedJet(id: id, unit: unit, name: name, nickname: nickname, generation: knownGeneration, tonightID: tonightID, run: run, slot: slot)
+        SavedBedJet(id: id, unit: unit, name: name, nickname: nickname, generation: knownGeneration, tonightID: tonightID, run: run, slot: slot,
+                    longestEnds: longestEnds, timerEnds: timerEnds)
     }
 
     var tonight: Schedule? {
@@ -100,6 +112,8 @@ final class BedJet: Identifiable {
         tonightID = saved.tonightID
         run = saved.run.flatMap { $0.endsAt > Date() ? $0 : nil }
         slot = saved.slot
+        longestEnds = saved.longestEnds
+        timerEnds = saved.timerEnds
         self.app = app
         loadHistory()
         if let ended = saved.run, run == nil {
@@ -202,6 +216,7 @@ final class BedJet: Identifiable {
 
     private func statusChanged(_ status: DeviceStatus) {
         self.status = status
+        statusReceivedAt = Date()
         observe(status)
         guard let run else { return }
         let settled = Date().timeIntervalSince(run.startedAt) > 15
@@ -312,7 +327,6 @@ final class BedJet: Identifiable {
             try await link.setMode(mode)
             self.run = nil
             if let endingSchedule { self.record(.scheduleEnded(name: endingSchedule, ending: .byYou)) }
-            self.keepsLongestRuntime = true
             try await self.extendRuntime(entering: mode)
         }
     }
@@ -320,38 +334,69 @@ final class BedJet: Identifiable {
     func setTemperature(_ halfCelsius: Int) async {
         guard let link else { return }
         await perform {
+            let keepsTimer = self.keepsTimer()
             try await link.setTemperature(halfCelsius)
-            try await self.extendRuntime()
+            if keepsTimer { try await self.extendRuntime() }
         }
     }
 
     func setFan(percent: Int) async {
         guard let link else { return }
         await perform {
+            let keepsTimer = self.keepsTimer()
             try await link.setFan(step: percent / 5 - 1)
-            try await self.extendRuntime()
+            if keepsTimer { try await self.extendRuntime() }
         }
     }
 
     func setRuntime(minutes: Int) async {
         guard let link else { return }
-        keepsLongestRuntime = false
+        // From now on the timer counts down as it is: nothing on this phone changes it until a mode is chosen.
+        longestEnds = nil
+        timePickedAt = Date()
         await perform { try await link.setRuntime(minutes: minutes) }
     }
 
-    /// Air started from the Remote runs for as long as the BedJet allows, until a shorter time is
-    /// picked there. Schedules keep their own timing.
+    /// Whether changing the temperature or fan should keep the timer to the end Lull gave it. Asked before the change
+    /// is sent, since in Heat a hotter setting can cut the BedJet's timer by itself. A timer set from another phone or
+    /// the BedJet's own remote since Lull last set it is theirs, and left alone from then on.
+    private func keepsTimer() -> Bool {
+        // Only a report from this connection says where the timer is now.
+        guard longestEnds != nil, let timerEnds, let status, status.isRunning, let statusReceivedAt, statusReceivedAt > connectedAt else {
+            return false
+        }
+        let unitEnds = statusReceivedAt.addingTimeInterval(TimeInterval(status.remainingSeconds))
+        guard abs(unitEnds.timeIntervalSince(timerEnds)) < 60 else {
+            longestEnds = nil
+            return false
+        }
+        return true
+    }
+
+    /// Air started from the Remote runs for as long as the BedJet allows, until a time is picked. Changing the
+    /// temperature or fan keeps to the end that gave: it never adds time, and gives back time the BedJet cut short
+    /// for a hotter setting once the setting allows. Schedules keep their own timing.
     private func extendRuntime(entering mode: Mode? = nil) async throws {
         // A schedule started from another phone times its own phases; leave its timer alone.
-        guard keepsLongestRuntime, run == nil, runningElsewhereStep == nil, let link else { return }
+        guard run == nil, runningElsewhereStep == nil, let link else { return }
+        let asked = Date()
         // The limit depends on mode, temperature and fan, and the unit keeps the previous timer when
         // the mode changes, so wait for it to report the new state before reading the limit.
         try await Task.sleep(nanoseconds: 600_000_000)
         for _ in 0..<20 {
             if let status, status.isRunning, status.maxRuntimeMinutes > 0, mode == nil || status.mode == mode {
-                if status.remainingSeconds <= (status.maxRuntimeMinutes - 1) * 60 {
-                    try await link.setRuntime(minutes: status.maxRuntimeMinutes)
+                // A time picked while this waited wins.
+                guard timePickedAt < asked else { return }
+                let longest = Date().addingTimeInterval(TimeInterval(status.maxRuntimeMinutes * 60))
+                if mode != nil { longestEnds = longest }
+                guard let longestEnds else { return }
+                let minutes = max(Int((min(longestEnds, longest).timeIntervalSinceNow / 60).rounded()), 1)
+                var remaining = status.remainingSeconds
+                if abs(remaining - minutes * 60) > 60 {
+                    try await link.setRuntime(minutes: minutes)
+                    remaining = minutes * 60
                 }
+                timerEnds = Date().addingTimeInterval(TimeInterval(remaining))
                 return
             }
             try await Task.sleep(nanoseconds: 200_000_000)
