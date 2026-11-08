@@ -37,6 +37,8 @@ room, or run out of battery; the night keeps going.
   connects to the units you picked. If yours is away, Lull says so rather than taking another.
 - **Several BedJets**: one on each side of the bed? Add both and give them nicknames. They stay connected,
   each runs its own night and keeps its own history, and the name at the top of every screen switches between them.
+- **Firmware updates**: ask a BedJet 3 to check for newer firmware, and give it the Wi-Fi network it downloads
+  updates over, without the official app. The BedJet fetches the update itself; Lull never touches the internet.
 - **Private**: Bluetooth only. No accounts, analytics, or network calls.
 
 > Lull is an independent project and is not affiliated with or endorsed by BedJet LLC.
@@ -62,6 +64,7 @@ agents read before working here.
 | `android/bedjetkit/` | Kotlin port of BedJetKit: the same protocols, simulated BedJet and tests |
 | `fastlane/` | Release lanes for both stores, and both store listings (`metadata/` and `metadata/android/`) |
 | `docs/BEDJET_V2_PROTOCOL.md` | The BedJet V2 protocol, how it was worked out, and what is still unconfirmed |
+| `docs/BEDJET_3_FIRMWARE.md` | How a BedJet 3 is given Wi-Fi and asked to update its firmware, and how that was worked out |
 | `screenshots/`, `app-store-screenshots/` | Marketing and App Store screenshots |
 
 ## Getting started

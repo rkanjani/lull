@@ -9,6 +9,7 @@ import com.rohankanjani.lull.bedjetkit.BedJetLink
 import com.rohankanjani.lull.bedjetkit.Codec
 import com.rohankanjani.lull.bedjetkit.DemoLink
 import com.rohankanjani.lull.bedjetkit.DeviceStatus
+import com.rohankanjani.lull.bedjetkit.FirmwareUpdate
 import com.rohankanjani.lull.bedjetkit.Generation
 import com.rohankanjani.lull.bedjetkit.Limits
 import com.rohankanjani.lull.bedjetkit.LinkState
@@ -17,6 +18,7 @@ import com.rohankanjani.lull.bedjetkit.StoredProgram
 import com.rohankanjani.lull.bedjetkit.acknowledgeNotification
 import com.rohankanjani.lull.bedjetkit.deviceName
 import com.rohankanjani.lull.bedjetkit.firmwareVersion
+import com.rohankanjani.lull.bedjetkit.joinWiFi
 import com.rohankanjani.lull.bedjetkit.setFan
 import com.rohankanjani.lull.bedjetkit.setLED
 import com.rohankanjani.lull.bedjetkit.setMode
@@ -27,6 +29,7 @@ import com.rohankanjani.lull.bedjetkit.startProgram
 import com.rohankanjani.lull.bedjetkit.store
 import com.rohankanjani.lull.bedjetkit.storedPrograms
 import com.rohankanjani.lull.bedjetkit.syncClock
+import com.rohankanjani.lull.bedjetkit.updateFirmware
 import kotlinx.coroutines.CancellationException
 import kotlin.math.abs
 import kotlinx.coroutines.Job
@@ -57,7 +60,36 @@ data class SavedBedJet(
     val remoteTimer: RemoteTimer? = null,
     val longestEnds: Long? = null,
     val timerEnds: Long? = null,
+    /** The Wi-Fi network Lull last gave a BedJet 3. Never the password. */
+    val wifiNetwork: String? = null,
 )
+
+/** A BedJet 3 using its Wi-Fi because Lull asked: to join a network, or to check for newer firmware. */
+data class WiFiActivity(
+    val purpose: Purpose,
+    /** What the BedJet is doing, until it's over. */
+    val step: String = "Asking your BedJet…",
+    /** How it went, once it's over. */
+    val outcome: String? = null,
+    val failed: Boolean = false,
+    /** Installing new firmware, so the version is read again once the BedJet is back. */
+    val awaitsRestart: Boolean = false,
+    /** Not back ten minutes after it began installing, so no longer said to be restarting. */
+    val restartOverdue: Boolean = false,
+    /**
+     * Asked for from the BedJet's offer of an update rather than the BedJet sheet, so how it went is said the same
+     * way, until that's closed.
+     */
+    val offered: Boolean = false,
+    /** The newer firmware the BedJet came back on. */
+    val installed: String? = null,
+    /** When the BedJet was asked, which tells this activity from a later one. */
+    val startedAt: Long = System.currentTimeMillis(),
+) {
+    enum class Purpose { JOINING, UPDATING }
+
+    val isRunning: Boolean get() = outcome == null
+}
 
 /** One BedJet Lull knows: its connection, what it reports, the schedule running on it and what it did. */
 class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel) {
@@ -77,6 +109,12 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     var status by mutableStateOf<DeviceStatus?>(null); private set
     /** When [status] arrived. It is kept while another phone has the BedJet or Lull is off screen, so it ages. */
     var statusReceivedAt: Long? = null; private set
+    /**
+     * The BedJet's own settings from its latest full report: light ring, beeps, a running program. A report's
+     * second half arrives separately, and not at all for a moment after reconnecting, so this keeps the last one
+     * rather than letting what's shown from it flicker away.
+     */
+    var settings by mutableStateOf<DeviceStatus.Extra?>(null); private set
     var firmware by mutableStateOf<String?>(null); private set
     /** The kind of BedJet, kept so schedules can be edited for it while it is away. Null until it has said. */
     var knownGeneration by mutableStateOf(saved.generation); private set
@@ -117,6 +155,20 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         private set(value) { writingSchedule = value; app.publishLiveNotifications() }
     /** Set when every slot on the BedJet is taken and the user has to pick one to reuse. */
     var needsSlotChoice by mutableStateOf(false)
+    /** The BedJet using its Wi-Fi because Lull asked, and how that went. One at a time. */
+    var wifiActivity by mutableStateOf<WiFiActivity?>(null); private set
+    /** Set while the BedJet says newer firmware is available. */
+    var updateAvailable by mutableStateOf(false); private set
+    /**
+     * Set once an offered update is put off or asked for, so it waits in the BedJet sheet instead of asking again
+     * until Lull is next opened.
+     */
+    var firmwareUpdateDeferred by mutableStateOf(false); private set
+    /** The Wi-Fi network Lull last gave the BedJet, kept to show it: a BedJet can't be asked which network it has. */
+    private var savedWifiNetwork by mutableStateOf(saved.wifiNetwork)
+    var wifiNetwork: String?
+        get() = savedWifiNetwork
+        private set(value) { savedWifiNetwork = value; app.save() }
 
     private var link: BedJetLink? = null
     private var lastRefresh = 0L
@@ -155,9 +207,16 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     private var lastCommandAt = 0L
     /** When this phone last turned the BedJet off, to tell a report sent just before that from one sent after. */
     private var turnedOffAt: Long? = null
+    /** The Wi-Fi phase the BedJet last reported, and since when, to tell a step under way from one left stuck. */
+    private var lastWiFiPhase: Int? = null
+    private var wifiPhaseSince = 0L
+    /** The BedJet reported it's restarting to install firmware, and hasn't restarted since. */
+    private var restartsToInstall by mutableStateOf(false)
+    /** The connection the BedJet began installing firmware on, which ends with its restart. */
+    private var installBeganOn = 0L
 
     val saved: SavedBedJet
-        get() = SavedBedJet(id, unit, name, nickname, knownGeneration, tonightID, run, slot, remoteTimer, longestEnds, timerEnds)
+        get() = SavedBedJet(id, unit, name, nickname, knownGeneration, tonightID, run, slot, remoteTimer, longestEnds, timerEnds, wifiNetwork)
 
     val tonight: Schedule?
         get() = app.schedules.firstOrNull { it.id == tonightID } ?: app.schedules.firstOrNull()
@@ -167,7 +226,8 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
      * Controls stay live while connecting or while another phone has the BedJet: what is tapped
      * is sent the moment the connection is up.
      */
-    val canControl: Boolean get() = linkState != LinkState.BLUETOOTH_OFF && linkState != LinkState.UNAUTHORIZED
+    /** Not while it uses its Wi-Fi, though: see [isUsingWiFi]. */
+    val canControl: Boolean get() = linkState != LinkState.BLUETOOTH_OFF && linkState != LinkState.UNAUTHORIZED && !isUsingWiFi
     /** A schedule is running on the BedJet that this phone didn't start, for example from a partner's phone. */
     val runningElsewhereStep: Int?
         get() {
@@ -197,11 +257,14 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
             stop()
         }
         status = null
+        settings = null
         firmware = null
         deviceSlots = emptyList()
         val link = app.makeLink(this)
-        // Never hand the BedJet to another phone halfway through saving a schedule.
-        (link as? BleLink)?.canYield = { !isBusy }
+        // Never hand the BedJet to another phone halfway through saving a schedule, while it uses its Wi-Fi for this
+        // phone, or while this phone waits for it to restart into new firmware: the other phone would otherwise take it
+        // as it comes back, and this one would never hear how the update went.
+        (link as? BleLink)?.canYield = { !isBusy && wifiActivity?.isRunning != true && !expectsRestart }
         link.onStateChange = { linkStateChanged(it) }
         link.onStatus = { statusChanged(it) }
         this.link = link
@@ -267,6 +330,9 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         if (searchTimer != null) return
         searchTimer = app.scope.launch {
             delay(15_000)
+            // A BedJet restarts to check for firmware and again to install it, which can take ten minutes, and the tips
+            // would suggest unplugging it partway through, so they wait for as long as it's expected back.
+            while (expectsRestart) delay(1000)
             isSlowToFind = true
         }
     }
@@ -274,6 +340,8 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     private fun linkStateChanged(state: LinkState) {
         linkState = state
         timeSearch()
+        // Gone, so restarted, or about to come back from one.
+        if (state != LinkState.READY) restartsToInstall = false
         val link = link ?: return
         if (state != LinkState.READY) return
         connectedAt = System.currentTimeMillis()
@@ -281,18 +349,24 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         app.save()
         logConnection()
         // Phones take turns with the BedJet, so reconnecting is routine; what is saved on it
-        // only needs re-reading now and then.
-        if (System.currentTimeMillis() - lastRefresh <= 300_000) return
+        // only needs re-reading now and then, or once it's back from restarting into new firmware.
+        if (System.currentTimeMillis() - lastRefresh <= 300_000 && wifiActivity?.awaitsRestart != true) return
         app.scope.launch {
             // Anything the person tapped while connecting goes first.
             delay(1200)
-            while (isBusy) delay(200)
+            // Setting the clock is a command, so it waits while the BedJet uses its Wi-Fi.
+            while ((isBusy || reportsWiFiUnderWay || wifiActivity?.isRunning == true) && link.state == LinkState.READY) delay(200)
             if (link.state != LinkState.READY) return@launch
+            // Still on the connection the install began on, so the version is read once it's back from restarting.
+            if (wifiActivity?.awaitsRestart == true && connectedAt == installBeganOn) return@launch
             try {
                 link.syncClock()
                 name = link.deviceName()
                 app.save()
-                firmware = link.firmwareVersion()
+                val previous = this@BedJet.firmware
+                val firmware = link.firmwareVersion()
+                this@BedJet.firmware = firmware
+                if (wifiActivity?.awaitsRestart == true) finishInstalling(firmware, previous)
                 refreshSlots()
                 lastRefresh = System.currentTimeMillis()
             } catch (error: CancellationException) {
@@ -311,7 +385,10 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         this.turnedOffAt = null
         this.status = status
         statusReceivedAt = System.currentTimeMillis()
+        status.extra?.let { settings = it }
         observe(status)
+        noticeWiFiPhase(status)
+        noticeUpdate(status)
         app.publishLiveNotifications()
         app.publishWidgets()
         val run = run ?: return
@@ -641,6 +718,11 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     }
 
     private suspend fun perform(work: suspend () -> Unit) {
+        // Widgets, tiles and shortcuts reach here too, so this is checked here and not only by the buttons.
+        if (isUsingWiFi) {
+            app.report("Your BedJet is setting up Wi-Fi or updating its firmware. Try again once it's done.", from = this)
+            return
+        }
         isBusy = true
         try {
             takeControl()
@@ -654,6 +736,194 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
             isBusy = false
             lastCommandAt = System.currentTimeMillis()
         }
+    }
+
+    // Wi-Fi and firmware
+
+    /** Connected with the air off and no schedule running, so restarting the BedJet interrupts nothing. */
+    val isIdle: Boolean get() = isConnected && status?.mode == Mode.STANDBY && run == null && runningElsewhereStep == null
+    /** Updating restarts the BedJet, so it waits until that interrupts nothing. */
+    val canUpdateFirmware: Boolean get() = isIdle && !isBusy && !isUsingWiFi
+    val canJoinWiFi: Boolean get() = isConnected && !isUsingWiFi
+    /** The BedJet is away because it's checking for or installing firmware, and will be back. */
+    val expectsRestart: Boolean
+        get() = wifiActivity?.takeIf { it.purpose == WiFiActivity.Purpose.UPDATING }
+            ?.let { it.isRunning || (it.awaitsRestart && !it.restartOverdue) } ?: false
+    /** Away while it restarts, and only that: Bluetooth being off or another phone having it still say so. */
+    val isRestarting: Boolean
+        get() = expectsRestart && (linkState == LinkState.SEARCHING || linkState == LinkState.CONNECTING)
+    /**
+     * The BedJet is joining Wi-Fi, checking for firmware or installing it, or is about to restart for it, whoever
+     * asked: this phone, another one, the official app or the BedJet itself. Nothing else is sent to it meanwhile:
+     * the restart would cut off a command or a schedule being saved, and a night started now would end with it,
+     * while a second check or network could restart it partway through installing.
+     */
+    val isUsingWiFi: Boolean get() = wifiActivity?.isRunning == true || expectsRestart || reportsWiFiUnderWay
+
+    /**
+     * What the BedJet's own report says. A step that hasn't moved on in ten minutes, the longest a check takes, is
+     * stuck rather than under way. Restarting to install only lasts until the BedJet does restart, since that
+     * result may still be showing once it's back.
+     */
+    private val reportsWiFiUnderWay: Boolean
+        get() {
+            val phase = settings?.wifiPhase ?: return false
+            if (System.currentTimeMillis() - wifiPhaseSince >= 600_000) return false
+            if (phase == Codec.WiFiPhase.INSTALLING) return restartsToInstall
+            return phase != Codec.WiFiPhase.IDLE && !Codec.WiFiPhase.isResult(phase)
+        }
+
+    private fun noticeWiFiPhase(status: DeviceStatus) {
+        val phase = status.extra?.wifiPhase ?: return
+        if (phase == lastWiFiPhase) return
+        lastWiFiPhase = phase
+        wifiPhaseSince = System.currentTimeMillis()
+        restartsToInstall = phase == Codec.WiFiPhase.INSTALLING
+    }
+
+    /**
+     * Gives the BedJet the Wi-Fi network it fetches firmware over. Lull remembers the name, to show it, but never
+     * the password.
+     */
+    suspend fun joinWiFi(network: String, password: String) {
+        if (!canJoinWiFi) return
+        useWiFi(WiFiActivity.Purpose.JOINING) { link, progress ->
+            link.joinWiFi(network, password, progress)
+            wifiNetwork = network
+            "Your BedJet joined “$network” and can now check for firmware updates."
+        }
+    }
+
+    /**
+     * Asks the BedJet to check for newer firmware, which it installs straight away. [offered] when the person
+     * accepted the BedJet's offer of an update, so how it went is said the same way once it's over.
+     */
+    suspend fun updateFirmware(offered: Boolean = false) {
+        // The air may have been turned on, or a schedule started, while the person was confirming.
+        if (!canUpdateFirmware) return
+        // Asked once a launch: whether this works or not, the update waits in the BedJet sheet from now on.
+        firmwareUpdateDeferred = true
+        useWiFi(WiFiActivity.Purpose.UPDATING, offered) { link, progress ->
+            // Known before asking, even when this comes straight after connecting, to tell newer firmware once it's back.
+            if (firmware == null) attempt { firmware = link.firmwareVersion() }
+            when (val found = link.updateFirmware(progress)) {
+                FirmwareUpdate.UpToDate -> "Your BedJet's firmware is up to date."
+                FirmwareUpdate.Installing -> {
+                    // Read again once it's back, to show the new version.
+                    lastRefresh = 0
+                    installBeganOn = connectedAt
+                    wifiActivity = wifiActivity?.copy(awaitsRestart = true)
+                    stopExpectingRestartLater()
+                    "Your BedJet is installing the update and restarts when it's done. Keep it plugged in."
+                }
+                is FirmwareUpdate.Updated -> {
+                    firmware = found.version
+                    wifiActivity = wifiActivity?.copy(installed = found.version)
+                    "Your BedJet updated its firmware to ${found.version}."
+                }
+            }
+        }
+    }
+
+    private suspend fun useWiFi(
+        purpose: WiFiActivity.Purpose,
+        offered: Boolean = false,
+        work: suspend (BedJetLink, (Int) -> Unit) -> String,
+    ) {
+        val link = link ?: return
+        if (wifiActivity?.isRunning == true) return
+        wifiActivity = WiFiActivity(
+            purpose,
+            step = if (purpose == WiFiActivity.Purpose.UPDATING) "Asking your BedJet to check…" else "Asking your BedJet…",
+            offered = offered,
+        )
+        try {
+            val outcome = work(link) { phase -> step(phase)?.let { wifiActivity = wifiActivity?.copy(step = it) } }
+            wifiActivity = wifiActivity?.copy(outcome = outcome)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            wifiActivity = wifiActivity?.copy(
+                outcome = error.message ?: BedJetError.BadResponse.message.orEmpty(),
+                failed = true,
+                awaitsRestart = false,
+            )
+        }
+    }
+
+    /** The BedJet is back from restarting after it began installing, on this firmware. */
+    private fun finishInstalling(firmware: String, previous: String?) {
+        // Worded as when the update is over before the link is lost, if the version did change.
+        wifiActivity = if (previous != null && firmware != previous) {
+            wifiActivity?.copy(outcome = "Your BedJet updated its firmware to $firmware.", installed = firmware, awaitsRestart = false)
+        } else {
+            wifiActivity?.copy(outcome = "Your BedJet restarted with firmware $firmware.", awaitsRestart = false)
+        }
+    }
+
+    /**
+     * A BedJet not back ten minutes after it began installing isn't restarting any more, so from then on it's
+     * said to be away like any other, with the tips for finding it. Its version is still read if it does come back.
+     */
+    private fun stopExpectingRestartLater() {
+        val startedAt = wifiActivity?.startedAt ?: return
+        app.scope.launch {
+            delay(600_000)
+            val activity = wifiActivity
+            if (activity?.startedAt == startedAt && activity.awaitsRestart) wifiActivity = activity.copy(restartOverdue = true)
+        }
+    }
+
+    /** What the BedJet is doing at each step it reports while it uses its Wi-Fi. */
+    private fun step(phase: Int): String? = when (phase) {
+        Codec.WiFiPhase.STARTING -> "Starting…"
+        Codec.WiFiPhase.JOINING -> "Joining Wi-Fi…"
+        Codec.WiFiPhase.JOINED -> "Connected to Wi-Fi…"
+        Codec.WiFiPhase.TESTING -> "Testing the connection…"
+        Codec.WiFiPhase.CHECKING -> "Checking for an update…"
+        Codec.WiFiPhase.UPDATING -> "Installing the update…"
+        Codec.WiFiPhase.RESTARTING -> "Restarting your BedJet to check…"
+        else -> null
+    }
+
+    /**
+     * A BedJet 3 on Wi-Fi checks for firmware by itself now and then, and says when there's newer firmware until
+     * that's acknowledged. Lull leaves it set: the BedJet stops saying so once it's updated, and other phones and
+     * the official app may still want to show it.
+     */
+    private fun noticeUpdate(status: DeviceStatus) {
+        when (status.extra?.notification) {
+            Codec.Notification.UPDATE_AVAILABLE -> updateAvailable = true
+            0 -> updateAvailable = false
+        }
+    }
+
+    sealed interface FirmwarePrompt {
+        /** The BedJet says newer firmware is available. */
+        data object Available : FirmwarePrompt
+        /** How an update the person accepted from the offer went. */
+        data class Finished(val activity: WiFiActivity) : FirmwarePrompt
+    }
+
+    /**
+     * What to ask or tell the person about firmware now. An offered update waits until restarting the BedJet would
+     * interrupt nothing, and is asked about once; put off, it waits in the BedJet sheet.
+     */
+    val firmwarePrompt: FirmwarePrompt?
+        get() {
+            val activity = wifiActivity
+            if (activity != null && activity.offered && !activity.isRunning && !activity.awaitsRestart) return FirmwarePrompt.Finished(activity)
+            if (generation != Generation.V3 || !updateAvailable || firmwareUpdateDeferred || !canUpdateFirmware) return null
+            return FirmwarePrompt.Available
+        }
+
+    fun deferFirmwareUpdate() {
+        firmwareUpdateDeferred = true
+    }
+
+    /** Closes the report of how an offered update went; it stays in the BedJet sheet. */
+    fun dismissFirmwareResult() {
+        wifiActivity = wifiActivity?.copy(offered = false)
     }
 
     /** Like Swift's `try?`: anything that goes wrong is ignored, but cancellation still cancels. */

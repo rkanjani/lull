@@ -368,8 +368,10 @@ final class AppModel {
         if let makesLink { return makesLink(bedJet) }
         guard bedJet.isDemo else { return BLELink(unit: bedJet.unit) }
         let demo = DemoLink(name: bedJet.name ?? DemoLink.defaultName,
-                            slots: [StoredProgram(name: "Summer nights", steps: Self.startingSchedules[2].program.steps), nil, nil])
+                            slots: [StoredProgram(name: "Summer nights", steps: Self.startingSchedules[2].program.steps), nil, nil],
+                            wifiNetwork: bedJet.wifiNetwork)
         demo.answers = !(Self.demoFirstUnitAway && bedJet.unit == DemoDiscovery.simulated[0].id)
+        if Self.demoOffersFirmwareUpdate { demo.offerFirmwareUpdate() }
         return demo
     }
 
@@ -514,6 +516,8 @@ final class AppModel {
         guard startsWithoutWakeTimes else { return Schedule.templates }
         return Schedule.templates.map { var schedule = $0; schedule.wakeTime = nil; return schedule }
     }
+    /// Launching with `-demoFirmwareUpdate` makes the simulated BedJets say newer firmware is available.
+    static let demoOffersFirmwareUpdate = ProcessInfo.processInfo.arguments.contains("-demoFirmwareUpdate")
 
     private func load() {
         let saved = storage.file("lull.json").flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(Saved.self, from: $0) }

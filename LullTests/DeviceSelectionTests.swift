@@ -197,6 +197,127 @@ final class DeviceSelectionTests: XCTestCase {
         XCTAssertEqual(model.bedJet?.unit, guest.id)
     }
 
+    /// A real BedJet 3 sends each report in two halves, and right after reconnecting, such as after restarting to check
+    /// for firmware, only the first half comes for a moment. Its settings stay shown meanwhile, so the sheet holds still.
+    func testSettingsStayWhileAReportsSecondHalfIsLate() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        try await waitUntil("a full report") { bedJet.settings != nil }
+        let settings = bedJet.settings
+        var firstHalf = try XCTUnwrap(bedJet.status)
+        firstHalf.extra = nil
+        unit(mine.id).report(firstHalf)
+        XCTAssertNil(bedJet.status?.extra)
+        XCTAssertEqual(bedJet.settings, settings)
+    }
+
+    /// A BedJet checking for firmware restarts partway through, by itself or for another phone, so nothing is sent
+    /// meanwhile: not a command, not a night, not another check or network.
+    func testNothingIsSentWhileTheBedJetChecksForFirmware() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        try await waitUntil("a full report") { bedJet.settings != nil }
+        var checking = try XCTUnwrap(bedJet.status)
+        checking.extra?.wifiPhase = Codec.WiFiPhase.checking
+        unit(mine.id).report(checking)
+        XCTAssertFalse(bedJet.canControl)
+        XCTAssertFalse(bedJet.canUpdateFirmware)
+        XCTAssertFalse(bedJet.canJoinWiFi)
+
+        let sentBefore = unit(mine.id).sent.count
+        await bedJet.setMode(.heat)
+        await bedJet.startTonight()
+        await bedJet.updateFirmware()
+        XCTAssertEqual(unit(mine.id).sent.count, sentBefore)
+        XCTAssertNotNil(model.errorMessage)
+
+        // Done: the result stays in the report, and the BedJet is free again.
+        var done = checking
+        done.extra?.wifiPhase = Codec.WiFiPhase.upToDate
+        unit(mine.id).report(done)
+        XCTAssertTrue(bedJet.canControl)
+        XCTAssertTrue(bedJet.canUpdateFirmware)
+    }
+
+    /// Restarting to install firmware lasts until the BedJet restarts. It may still say so once it's back.
+    func testRestartingToInstallOnlyHoldsUntilTheBedJetRestarts() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        try await waitUntil("a full report") { bedJet.settings != nil }
+        var installing = try XCTUnwrap(bedJet.status)
+        installing.extra?.wifiPhase = Codec.WiFiPhase.installing
+        unit(mine.id).report(installing)
+        XCTAssertFalse(bedJet.canControl)
+
+        // Gone, so restarted: the same result showing afterwards is the one from before.
+        unit(mine.id).stop()
+        unit(mine.id).report(installing)
+        XCTAssertTrue(bedJet.canControl)
+    }
+
+    /// Like a real BedJet 3, the simulated one restarts to check, downloads the newer firmware it offered, then
+    /// restarts into it. Lull holds on to it throughout, and says what it's on once it's back.
+    func testAnOfferedUpdateIsInstalledAndSaidOnceBack() async throws {
+        setups[mine.id] = { $0.device.offerFirmwareUpdate() }
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        try await waitUntil("the offer") { bedJet.firmwarePrompt == .available }
+        bedJet.deferFirmwareUpdate()
+        await bedJet.updateFirmware(offered: true)
+        XCTAssertTrue(bedJet.expectsRestart)
+        XCTAssertFalse(bedJet.canControl)
+        XCTAssertNil(bedJet.firmwarePrompt)
+
+        try await waitUntil("the BedJet to be back on the new firmware", timeout: 30) { bedJet.firmware == "V1.21 (demo)" }
+        guard case let .finished(activity)? = bedJet.firmwarePrompt else { return XCTFail("How it went wasn't said") }
+        XCTAssertEqual(activity.installed, "V1.21 (demo)")
+        XCTAssertFalse(bedJet.expectsRestart)
+        XCTAssertTrue(bedJet.canControl)
+        XCTAssertEqual(unit(mine.id).sent.filter { $0 == Codec.updateFirmware }.count, 1)
+        bedJet.dismissFirmwareResult()
+        XCTAssertNil(bedJet.firmwarePrompt)
+    }
+
+    /// Updating restarts the BedJet, so it waits for the air to be off and the night to be over.
+    func testAnUpdateWaitsForTheAirToBeOff() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        try await waitUntil("a report") { bedJet.status != nil }
+        XCTAssertTrue(bedJet.canUpdateFirmware)
+        await bedJet.setMode(.heat)
+        try await waitUntil("the air to be on") { bedJet.status?.mode == .heat }
+        XCTAssertFalse(bedJet.canUpdateFirmware)
+        await bedJet.updateFirmware()
+        XCTAssertFalse(unit(mine.id).sent.contains(Codec.updateFirmware))
+        await bedJet.setMode(.standby)
+        try await waitUntil("the air to be off") { bedJet.status?.mode == .standby }
+        XCTAssertTrue(bedJet.canUpdateFirmware)
+    }
+
+    /// The BedJet's word that newer firmware is available is offered once and then waits in the sheet. Lull leaves
+    /// it for the BedJet to clear, so other phones and the official app still see it.
+    func testAnOfferedUpdateIsAskedAboutOnceAndLeftSet() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        try await waitUntil("a full report") { bedJet.settings != nil }
+        var offered = try XCTUnwrap(bedJet.status)
+        offered.extra?.notification = Codec.Notification.updateAvailable
+        unit(mine.id).report(offered)
+        XCTAssertTrue(bedJet.updateAvailable)
+        XCTAssertEqual(bedJet.firmwarePrompt, .available)
+
+        bedJet.deferFirmwareUpdate()
+        XCTAssertNil(bedJet.firmwarePrompt)
+        XCTAssertTrue(bedJet.updateAvailable)
+        XCTAssertFalse(unit(mine.id).sent.contains(Codec.acknowledgeNotification))
+    }
+
     func testACommandMeantForOneBedJetNeverReachesAnother() async throws {
         let model = launch()
         model.choose(mine)

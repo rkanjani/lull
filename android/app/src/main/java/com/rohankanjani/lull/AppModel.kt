@@ -50,6 +50,8 @@ data class LaunchOptions(
      * so a test that starts a night would otherwise pass or fail by the time of day.
      */
     val noWakeTimes: Boolean = false,
+    /** Makes the simulated BedJets say newer firmware is available. */
+    val demoFirmwareUpdate: Boolean = false,
 )
 
 /** Where Lull keeps what it saves. UI tests (`ephemeral`) and model tests keep nothing in the app's own place. */
@@ -465,7 +467,11 @@ class AppModel(
             name = bedJet.name ?: DemoLink.DEFAULT_NAME,
             slots = listOf(StoredProgram("Summer nights", startingSchedules[2].program.steps), null, null),
             scope = scope,
-        ).apply { answers = !(options.demoFirstUnitAway && bedJet.unit == DemoDiscovery.SIMULATED[0].id) }
+            wifiNetwork = bedJet.wifiNetwork,
+        ).apply {
+            answers = !(options.demoFirstUnitAway && bedJet.unit == DemoDiscovery.SIMULATED[0].id)
+            if (options.demoFirmwareUpdate) offerFirmwareUpdate()
+        }
     }
 
     private fun show(fleet: Fleet) {
