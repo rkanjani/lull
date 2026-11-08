@@ -7,6 +7,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
@@ -25,6 +26,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -254,9 +256,11 @@ class LullUiTest {
     /** A row in a list of BedJets, by its name and any code after it. */
     private fun row(title: String) = labelStartsWith("$title,")
 
-    private fun relaunch(demoChoose: Boolean = false, demoFirstUnitAway: Boolean = false) {
+    private fun relaunch(demoChoose: Boolean = false, demoFirstUnitAway: Boolean = false, demoFirmwareUpdate: Boolean = false) {
         scenario.close()
-        scenario = launchLull(ephemeral = true, demoChoose = demoChoose, demoFirstUnitAway = demoFirstUnitAway)
+        scenario = launchLull(
+            ephemeral = true, demoChoose = demoChoose, demoFirstUnitAway = demoFirstUnitAway, demoFirmwareUpdate = demoFirmwareUpdate,
+        )
     }
 
     /** Opens the BedJet sheet's list of BedJets nearby and picks the second simulated one, which shares a name. */
@@ -367,6 +371,39 @@ class LullUiTest {
     }
 
     @Test
+    fun firmwareUpdateIsOfferedAndInstalled() {
+        relaunch(demoFirmwareUpdate = true)
+        // The simulated BedJet offers newer firmware as soon as it connects with the air off.
+        compose.waitFor(hasText("Firmware update available"), timeoutMillis = 10_000)
+        compose.capture("firmware-update")
+        compose.onNodeWithText("Update Now").performClick()
+        // It restarts to check, downloads the update, restarts again into it, and Lull says so once it's back.
+        compose.waitFor(hasText("BedJet updated"), timeoutMillis = 30_000)
+        compose.onNodeWithText("BEDJET-DEMO is now on firmware V1.21 (demo).").assertExists()
+        compose.onNodeWithText("OK").performClick()
+        compose.waitFor(pill("BEDJET-DEMO"))
+        compose.onNodeWithText("BedJet updated").assertDoesNotExist()
+    }
+
+    @Test
+    fun aFirmwareUpdatePutOffWaitsInTheBedJetSheet() {
+        relaunch(demoFirmwareUpdate = true)
+        compose.waitFor(hasText("Firmware update available"), timeoutMillis = 10_000)
+        compose.onNodeWithText("Not Now").performClick()
+        compose.onNode(pill("BEDJET-DEMO")).performClick()
+        compose.waitFor(hasText("Done"))
+        val update = compose.onNodeWithText("Update Firmware").performScrollTo().assertIsEnabled()
+        compose.capture("firmware-update-sheet")
+        // Tapped through its click action: a tap by position can land while the sheet is still sliding up.
+        update.performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitFor(hasText("Update your BedJet's firmware?"))
+        compose.onNodeWithText("Update").performClick()
+        // Asked for from the sheet, how it went is said there, and the offer isn't made again.
+        compose.waitFor(hasText("Your BedJet updated its firmware to V1.21 (demo)."), timeoutMillis = 30_000)
+        compose.onNodeWithText("BedJet updated").assertDoesNotExist()
+    }
+
+    @Test
     fun remoteAndDevice() {
         compose.waitFor(hasText("Heat"), timeoutMillis = 10_000)
         Thread.sleep(2000)
@@ -411,6 +448,42 @@ class LullUiTest {
         compose.waitFor(hasText("SAVED ON THE BEDJET"), timeoutMillis = 10_000)
         compose.capture("device")
     }
+
+    @Test
+    fun wifiAndFirmwareCheck() {
+        compose.waitFor(hasText("Heat"), timeoutMillis = 10_000)
+        Thread.sleep(2000)
+        compose.onNode(hasContentDescription("BedJet,", substring = true)).performClick()
+        compose.waitFor(hasText("Network"), timeoutMillis = 10_000)
+        compose.onNodeWithText("Network").performScrollTo().performClick()
+
+        // The network's name is typed, and the simulated BedJet joins any network, testing it one step a second.
+        compose.waitFor(hasContentDescription("Name"))
+        compose.onNode(hasContentDescription("Name")).performTextInput("Home")
+        compose.onNode(hasContentDescription("Password")).performTextInput("12345678")
+        compose.onNodeWithText("Join Network").performClick()
+        // What the BedJet is doing takes the button's title, and how it went goes below once the title is back.
+        compose.waitUntilGone(hasText("Join Network"))
+        compose.waitFor(hasText("Your BedJet joined “Home” and can now check for firmware updates."), timeoutMillis = 15_000)
+        compose.onNodeWithText("Join Network").assertExists()
+        compose.capture("wifi")
+
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitFor(hasText("Home"))
+        compose.onNodeWithText("Check for Update").performScrollTo().performClick()
+        compose.waitFor(hasText("Check for a firmware update?"))
+        compose.capture("firmware-confirm")
+        compose.onNodeWithText("Check").performClick()
+        // Like a real BedJet 3, the simulated one restarts to check, and the sheet says so rather than losing it.
+        compose.waitFor(hasText("Restarting your BedJet to check…"), timeoutMillis = 10_000)
+        compose.onNodeWithText("Check for Update").assertDoesNotExist()
+        compose.capture("firmware-restarting")
+        compose.waitFor(hasText("Your BedJet's firmware is up to date."), timeoutMillis = 15_000)
+        compose.onNodeWithText("Check for Update").assertExists()
+        // Going back shows the sheet from the top, so bring the result, and the Wi-Fi network below it, into view.
+        compose.onNodeWithText("Network").performScrollTo()
+        compose.capture("firmware")
+    }
 }
 
 fun launchLull(
@@ -423,6 +496,7 @@ fun launchLull(
     // On unless a test is about the starter schedules' wake times: one more than 16 hours away can't be reached, so
     // starting a night would otherwise pass or fail by the time of day.
     noWakeTimes: Boolean = true,
+    demoFirmwareUpdate: Boolean = false,
 ): ActivityScenario<MainActivity> {
     val intent = Intent(ApplicationProvider.getApplicationContext(), MainActivity::class.java)
         .putExtra("ephemeral", ephemeral)
@@ -432,6 +506,7 @@ fun launchLull(
         .putExtra("demoChoose", demoChoose)
         .putExtra("demoFirstUnitAway", demoFirstUnitAway)
         .putExtra("noWakeTimes", noWakeTimes)
+        .putExtra("demoFirmwareUpdate", demoFirmwareUpdate)
     return ActivityScenario.launch(intent)
 }
 

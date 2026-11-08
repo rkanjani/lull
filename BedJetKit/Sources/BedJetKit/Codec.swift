@@ -23,6 +23,32 @@ public enum Codec {
         public static let programTooLong = 5
     }
 
+    /// Where the unit is in using its Wi-Fi, reported in byte 26 of its status. Below 20 it is still at it; from 20
+    /// up it has finished, and that result stays until it next starts. See `docs/BEDJET_3_FIRMWARE.md`.
+    public enum WiFiPhase {
+        public static let idle = 0
+        public static let starting = 1
+        public static let joining = 2
+        public static let joined = 3
+        public static let testing = 4
+        public static let checking = 5
+        public static let updating = 6
+        public static let restarting = 7
+        public static let noNetwork = 20
+        public static let cannotJoin = 21
+        public static let noAddress = 22
+        public static let noServer = 23
+        public static let works = 24
+        public static let testFailed = 25
+        public static let upToDate = 26
+        public static let radioOff = 27
+        /// Newer firmware was found, and the unit restarts to install it.
+        public static let installing = 28
+        public static let updateFailed = 29
+
+        public static func isResult(_ phase: Int) -> Bool { phase >= noNetwork }
+    }
+
     // MARK: Commands
 
     public static func setMode(_ mode: Mode) -> Data? { mode.button.map { Data([0x01, $0]) } }
@@ -35,7 +61,20 @@ public enum Codec {
     public static func startProgram(slot: Int) -> Data { Data([0x01, UInt8(0x80 + slot)]) }
     public static func deleteProgram(slot: Int) -> Data { Data([0x01, UInt8(0x83 + slot)]) }
     public static let acknowledgeNotification = Data([0x01, 0x52])
+    /// Checks BedJet's server over the unit's Wi-Fi. Newer firmware is installed straight away, restarting the unit.
+    public static let updateFirmware = Data([0x01, 0x43])
     public static func query(_ request: UInt8, tag: UInt8) -> Data { Data([0x41, request, tag]) }
+
+    /// Why the unit can't be given this Wi-Fi network, if it can't. Network names are at most 32 bytes and WPA
+    /// passwords 8 to 63; the official app only checks that the password is long enough.
+    public static func wifiProblem(network: String, password: String) -> String? {
+        let passwordBytes = password.utf8.count
+        if network.isEmpty { return "Enter the name of your Wi-Fi network." }
+        if network.utf8.count > 32 { return "Wi-Fi network names are at most 32 characters." }
+        if passwordBytes < 8 { return "Wi-Fi passwords are at least 8 characters." }
+        if passwordBytes > 63 { return "Wi-Fi passwords are at most 63 characters." }
+        return nil
+    }
 
     public static func nameProgram(slot: Int, name: String) -> Data {
         var bytes = [UInt8](repeating: 0, count: 19)
@@ -139,7 +178,8 @@ public enum Codec {
                 ledEnabled: b[27] & 0x10 != 0,
                 beepsMuted: b[27] & 0x01 != 0,
                 programStep: Int(b[28]),
-                notification: Int(b[29])
+                notification: Int(b[29]),
+                wifiPhase: Int(b[26])
             )
         }
         return status

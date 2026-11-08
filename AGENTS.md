@@ -86,8 +86,8 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Release | `fastlane ios release`, `.github/workflows/app-store.yml` | `fastlane android release`, `.github/workflows/play-store.yml` |
 
 Launch flags match too: `-ephemeral`, `-demoElapsedMinutes`, `-demoLabelConnected`, `-demoHistory`,
-`-demoChoose`, `-demoFirstUnitAway`, `-noWakeTimes` and `-logConnections` on iOS are the intent extras of the same
-names on Android. `-noWakeTimes` starts from the starter schedules without their wake times, since one more than 16 hours
+`-demoChoose`, `-demoFirstUnitAway`, `-noWakeTimes`, `-demoFirmwareUpdate` and `-logConnections` on iOS are the intent
+extras of the same names on Android. `-noWakeTimes` starts from the starter schedules without their wake times, since one more than 16 hours
 away can't be reached: tests that start a night use it so they don't pass or fail by the time of day. The Lull scheme passes it and
 `-ephemeral` to the app the unit tests run in, so the VoiceOver tests start from the starter schedules each run and
 leave the simulator's own copy of Lull alone. The watch apps take `-demo` (a pretend phone with the sample BedJets), `-demoHistory`,

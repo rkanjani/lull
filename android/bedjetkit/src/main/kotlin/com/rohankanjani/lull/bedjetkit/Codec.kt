@@ -25,6 +25,34 @@ object Codec {
         const val PROGRAM_TOO_LONG = 5
     }
 
+    /**
+     * Where the unit is in using its Wi-Fi, reported in byte 26 of its status. Below 20 it is still at it; from 20
+     * up it has finished, and that result stays until it next starts. See `docs/BEDJET_3_FIRMWARE.md`.
+     */
+    object WiFiPhase {
+        const val IDLE = 0
+        const val STARTING = 1
+        const val JOINING = 2
+        const val JOINED = 3
+        const val TESTING = 4
+        const val CHECKING = 5
+        const val UPDATING = 6
+        const val RESTARTING = 7
+        const val NO_NETWORK = 20
+        const val CANNOT_JOIN = 21
+        const val NO_ADDRESS = 22
+        const val NO_SERVER = 23
+        const val WORKS = 24
+        const val TEST_FAILED = 25
+        const val UP_TO_DATE = 26
+        const val RADIO_OFF = 27
+        /** Newer firmware was found, and the unit restarts to install it. */
+        const val INSTALLING = 28
+        const val UPDATE_FAILED = 29
+
+        fun isResult(phase: Int): Boolean = phase >= NO_NETWORK
+    }
+
     /** One fragment of a stored program, as read back from the unit. */
     data class Fragment(val total: Int, val steps: List<ProgramStep>)
 
@@ -40,7 +68,24 @@ object Codec {
     fun startProgram(slot: Int): ByteArray = bytes(0x01, 0x80 + slot)
     fun deleteProgram(slot: Int): ByteArray = bytes(0x01, 0x83 + slot)
     val acknowledgeNotification: ByteArray get() = bytes(0x01, 0x52)
+    /** Checks BedJet's server over the unit's Wi-Fi. Newer firmware is installed straight away, restarting the unit. */
+    val updateFirmware: ByteArray get() = bytes(0x01, 0x43)
     fun query(request: Int, tag: Int): ByteArray = bytes(0x41, request, tag)
+
+    /**
+     * Why the unit can't be given this Wi-Fi network, if it can't. Network names are at most 32 bytes and WPA
+     * passwords 8 to 63; the official app only checks that the password is long enough.
+     */
+    fun wifiProblem(network: String, password: String): String? {
+        val passwordBytes = password.encodeToByteArray().size
+        return when {
+            network.isEmpty() -> "Enter the name of your Wi-Fi network."
+            network.encodeToByteArray().size > 32 -> "Wi-Fi network names are at most 32 characters."
+            passwordBytes < 8 -> "Wi-Fi passwords are at least 8 characters."
+            passwordBytes > 63 -> "Wi-Fi passwords are at most 63 characters."
+            else -> null
+        }
+    }
 
     fun nameProgram(slot: Int, name: String): ByteArray {
         val bytes = ByteArray(19)
@@ -137,6 +182,7 @@ object Codec {
                     beepsMuted = b[27] and 0x01 != 0,
                     programStep = b[28],
                     notification = b[29],
+                    wifiPhase = b[26],
                 )
             } else {
                 null

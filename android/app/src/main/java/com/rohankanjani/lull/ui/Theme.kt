@@ -243,19 +243,32 @@ fun LabeledSlider(
  * A setting that's on or off, its name beside a switch. The whole row is one switch for TalkBack, as a Toggle is on iOS.
  */
 @Composable
-fun Toggle(label: String, checked: Boolean, modifier: Modifier = Modifier, fontWeight: FontWeight = FontWeight.Normal, onChange: (Boolean) -> Unit) {
+fun Toggle(
+    label: String,
+    checked: Boolean,
+    modifier: Modifier = Modifier,
+    fontWeight: FontWeight = FontWeight.Normal,
+    enabled: Boolean = true,
+    onChange: (Boolean) -> Unit,
+) {
     Row(
-        modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(checked, role = Role.Switch, onValueChange = onChange),
+        modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(checked, enabled = enabled, role = Role.Switch, onValueChange = onChange),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text(label, fontSize = 17.sp, fontWeight = fontWeight, modifier = Modifier.weight(1f, fill = false))
+        Text(label, fontSize = 17.sp, fontWeight = fontWeight, modifier = Modifier.weight(1f, fill = false).alpha(if (enabled) 1f else 0.4f))
         Spacer(Modifier.width(16.dp))
         Switch(
             checked, onCheckedChange = null,
+            enabled = enabled,
             colors = SwitchDefaults.colors(
                 checkedTrackColor = Theme.green, checkedThumbColor = Color.White, checkedBorderColor = Theme.green,
                 uncheckedTrackColor = Theme.neutral.copy(alpha = 0.35f), uncheckedThumbColor = Color.White, uncheckedBorderColor = Color.Transparent,
+                // Dimmed but still reading on or off, like iOS, rather than Material's grey.
+                disabledCheckedTrackColor = Theme.green.copy(alpha = 0.4f), disabledCheckedThumbColor = Color.White.copy(alpha = 0.6f),
+                disabledCheckedBorderColor = Color.Transparent,
+                disabledUncheckedTrackColor = Theme.neutral.copy(alpha = 0.15f), disabledUncheckedThumbColor = Color.White.copy(alpha = 0.6f),
+                disabledUncheckedBorderColor = Color.Transparent,
             ),
         )
     }

@@ -216,6 +216,56 @@ private fun Tabs(model: AppModel, bedJet: BedJet, selectedTab: Int, select: (Int
             containerColor = Theme.raised,
         )
     }
+
+    bedJet.firmwarePrompt?.let { prompt ->
+        val available = prompt == BedJet.FirmwarePrompt.Available
+        val close = { if (available) bedJet.deferFirmwareUpdate() else bedJet.dismissFirmwareResult() }
+        AlertDialog(
+            onDismissRequest = close,
+            title = { Text(FirmwareCopy.title(prompt)) },
+            text = { Text(FirmwareCopy.message(prompt, model.title(bedJet))) },
+            confirmButton = {
+                if (available) {
+                    TextButton({
+                        // Answered straight away, so the dialog doesn't come back before the update begins.
+                        bedJet.deferFirmwareUpdate()
+                        model.scope.launch { bedJet.updateFirmware(offered = true) }
+                    }) { Text("Update Now") }
+                } else {
+                    TextButton(close) { Text("OK") }
+                }
+            },
+            dismissButton = if (available) ({ TextButton(close) { Text("Not Now") } }) else null,
+            containerColor = Theme.raised,
+        )
+    }
+}
+
+/** The BedJet fetches its own firmware, so Lull only asks and reports back. */
+object FirmwareCopy {
+    const val HOW_IT_WORKS = "Your BedJet downloads it over its own Wi-Fi and restarts, which can take a few minutes. " +
+        "Keep it plugged in until Lull reconnects."
+    const val WAITS_FOR_IDLE = "Turn the air off and end any schedule first. Your BedJet restarts to check for updates."
+    const val CONFIRM_MESSAGE = "Your BedJet restarts to check. If there's a newer version, it downloads and installs it " +
+        "straight away, which can take a few minutes. Keep it plugged in until it's back."
+
+    fun button(available: Boolean): String = if (available) "Update Firmware" else "Check for Update"
+    fun confirmTitle(available: Boolean): String = if (available) "Update your BedJet's firmware?" else "Check for a firmware update?"
+
+    fun title(prompt: BedJet.FirmwarePrompt?): String = when (prompt) {
+        is BedJet.FirmwarePrompt.Finished -> when {
+            prompt.activity.failed -> "Couldn't update your BedJet"
+            prompt.activity.installed != null -> "BedJet updated"
+            else -> "BedJet up to date"
+        }
+        else -> "Firmware update available"
+    }
+
+    fun message(prompt: BedJet.FirmwarePrompt, name: String): String = when (prompt) {
+        BedJet.FirmwarePrompt.Available -> "New firmware is ready for $name. $HOW_IT_WORKS"
+        is BedJet.FirmwarePrompt.Finished ->
+            prompt.activity.installed?.let { "$name is now on firmware $it." } ?: prompt.activity.outcome.orEmpty()
+    }
 }
 
 /** Changes TalkBack users would otherwise only notice by exploring the screen again. */
@@ -247,6 +297,14 @@ private fun Announcements(bedJet: BedJet) {
         lastRunning = running
         if (old == running) return@LaunchedEffect
         if (running != null) announce("Started $running") else if (old != null) announce("Night ended")
+    }
+    // Joining Wi-Fi or checking for firmware takes a while, so how it went is said when it's over.
+    val outcome = bedJet.wifiActivity?.outcome
+    var lastOutcome by remember { mutableStateOf(outcome) }
+    LaunchedEffect(outcome) {
+        val old = lastOutcome
+        lastOutcome = outcome
+        if (outcome != null && outcome != old) announce(outcome)
     }
 }
 

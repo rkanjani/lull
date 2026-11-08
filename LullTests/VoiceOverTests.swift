@@ -303,9 +303,14 @@ final class VoiceOverTests: XCTestCase {
     /// Three-finger swipes to the end of the screen; VoiceOver only finds rows once they're scrolled into view.
     private func scrollToEnd() {
         guard let scroll = scrollView else { return }
-        let bottom = scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height
-        scroll.setContentOffset(CGPoint(x: 0, y: max(bottom, -scroll.adjustedContentInset.top)), animated: false)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        // A list only estimates the rows it hasn't made yet, so the end moves as it gets there; go until it stays put.
+        for _ in 0..<5 {
+            let bottom = scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height
+            scroll.setContentOffset(CGPoint(x: 0, y: max(bottom, -scroll.adjustedContentInset.top)), animated: false)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+            let settled = scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height
+            if abs(settled - bottom) < 1 { return }
+        }
     }
 
     /// Scrolls half a screen further, and back to the top after the end, so rows the list hasn't made yet appear.
