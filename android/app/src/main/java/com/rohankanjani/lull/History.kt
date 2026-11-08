@@ -39,6 +39,13 @@ data class HistoryEntry(
 
         @Serializable @SerialName("scheduleEnded")
         data class ScheduleEnded(val name: String?, val ending: Ending) : Event
+
+        /**
+         * A schedule moving on to its next phase, counted from one. Never recorded: the BedJet plays a schedule
+         * on its own while Lull is closed, so these are worked out from when it started, see `Night.timeline`.
+         */
+        @Serializable @SerialName("phaseStarted")
+        data class PhaseStarted(val number: Int, val of: Int, val phase: Phase) : Event
     }
 
     @Serializable
@@ -134,10 +141,36 @@ data class Night(
                         schedule = null
                         if (next != null) phases += Phase(Mode.WAIT, minutes = minutes(entry.date, next))
                     }
+                    is HistoryEntry.Event.PhaseStarted -> Unit
                 }
             }
             return phases.filter { it.minutes > 0 }
         }
+
+    /**
+     * The night's entries with each phase a schedule moved on to slotted in, up to `until`, the present moment. A
+     * schedule runs until something other than a change of air ends it, as `phases` draws it.
+     */
+    fun timeline(until: Long = System.currentTimeMillis()): List<HistoryEntry> {
+        val timeline = entries.toMutableList()
+        entries.forEachIndexed { index, entry ->
+            val schedulePhases = (entry.event as? HistoryEntry.Event.ScheduleStarted)?.phases ?: return@forEachIndexed
+            val ended = knownEnd(entries.subList(index, entries.size)) ?: until
+            var phaseStart = entry.date
+            for ((offset, phase) in schedulePhases.withIndex()) {
+                val number = offset + 1
+                if (number > 1) {
+                    if (phaseStart >= minOf(ended, until)) break
+                    // Kept the same from one drawing to the next, so the list doesn't see a new row each time.
+                    timeline += HistoryEntry(
+                        phaseStart, HistoryEntry.Event.PhaseStarted(number, of = schedulePhases.size, phase = phase), id = "${entry.id}-$number",
+                    )
+                }
+                phaseStart += phase.minutes * 60_000L
+            }
+        }
+        return timeline.sortedBy { it.date }
+    }
 
     companion object {
         fun group(entries: List<HistoryEntry>, zone: ZoneId = ZoneId.systemDefault()): List<Night> =
@@ -147,6 +180,19 @@ data class Night(
 
         fun evening(of: Long, zone: ZoneId = ZoneId.systemDefault()): LocalDate =
             Instant.ofEpochMilli(of - 12 * 3_600_000L).atZone(zone).toLocalDate()
+
+        /**
+         * How long the schedule that begins `played` is known to have run: until whatever ended it, other than a change
+         * of air, or null while nothing has. An end seen only when Lull reopened, an off or an early stop, is dated then,
+         * but the BedJet stopped some time before, after the last thing Lull saw happen. So the schedule is only known
+         * to have run until that, and no phase is listed past it.
+         */
+        private fun knownEnd(played: List<HistoryEntry>): Long? {
+            val start = played.firstOrNull() ?: return null
+            val end = (1 until played.size).firstOrNull { played[it].event !is HistoryEntry.Event.Air } ?: return null
+            if (!played[end].noticedLater) return played[end].date
+            return played.subList(0, end).lastOrNull { !it.noticedLater }?.date ?: start.date
+        }
 
         /** The stretch of a schedule between two times, idle once the schedule is over. */
         private fun play(schedule: List<Phase>, startedAt: Long, from: Long, to: Long): List<Phase> {

@@ -32,9 +32,13 @@ import androidx.compose.material.icons.filled.WbTwilight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
@@ -58,7 +62,9 @@ import com.rohankanjani.lull.AppModel
 import com.rohankanjani.lull.Format
 import com.rohankanjani.lull.HistoryEntry
 import com.rohankanjani.lull.Night
+import com.rohankanjani.lull.bedjetkit.Mode
 import com.rohankanjani.lull.title
+import kotlinx.coroutines.delay
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -147,9 +153,20 @@ private fun NightRow(model: AppModel, night: Night, isExpanded: Boolean, toggle:
                 enter = fadeIn(tween(350)) + expandVertically(tween(350)),
                 exit = fadeOut(tween(350)) + shrinkVertically(tween(350)),
             ) {
+                // Redrawn each minute, so a phase the schedule moves on to while History is open shows up.
+                var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+                LaunchedEffect(Unit) {
+                    while (true) {
+                        delay(60_000 - now % 60_000)
+                        now = System.currentTimeMillis()
+                    }
+                }
+                val timeline = night.timeline(until = now)
                 Column(Modifier.padding(top = 20.dp)) {
-                    night.entries.forEachIndexed { index, entry ->
-                        EntryRow(model, entry, isLast = index == night.entries.size - 1)
+                    timeline.forEachIndexed { index, entry ->
+                        key(entry.id) {
+                            EntryRow(model, entry, isLast = index == timeline.size - 1)
+                        }
                     }
                 }
             }
@@ -162,15 +179,19 @@ private fun EntryRow(model: AppModel, entry: HistoryEntry, isLast: Boolean) {
     val bedJet = LocalBedJet.current
     val event = entry.event
     // Parts are joined with a dot on screen; TalkBack gets commas and durations in words.
-    fun title(spoken: Boolean): String = when (event) {
-        is HistoryEntry.Event.Air -> {
-            val parts = if (bedJet.adjustsTemperature(event.mode)) {
-                listOf(event.mode.title, model.degrees(event.temperature), "fan ${event.fanPercent}%")
-            } else {
-                listOf(event.mode.title, "fan ${event.fanPercent}%")
-            }
-            parts.joinToString(if (spoken) ", " else " · ")
+    fun air(mode: Mode, temperature: Int, fan: Int, spoken: Boolean): String {
+        // A pause in a schedule blows no air.
+        if (mode == Mode.WAIT) return mode.title
+        val parts = if (bedJet.adjustsTemperature(mode)) {
+            listOf(mode.title, model.degrees(temperature), "fan $fan%")
+        } else {
+            listOf(mode.title, "fan $fan%")
         }
+        return parts.joinToString(if (spoken) ", " else " · ")
+    }
+    fun title(spoken: Boolean): String = when (event) {
+        is HistoryEntry.Event.Air -> air(event.mode, event.temperature, event.fanPercent, spoken)
+        is HistoryEntry.Event.PhaseStarted -> air(event.phase.mode, event.phase.temperature, event.phase.fanPercent, spoken)
         is HistoryEntry.Event.Off -> "Turned off"
         is HistoryEntry.Event.ScheduleStarted -> "Started ${event.name ?: "a schedule"}"
         is HistoryEntry.Event.ScheduleEnded -> {
@@ -184,6 +205,7 @@ private fun EntryRow(model: AppModel, entry: HistoryEntry, isLast: Boolean) {
         }
     }
     fun detail(spoken: Boolean): String? = buildList {
+        if (event is HistoryEntry.Event.PhaseStarted) add("Phase ${event.number} of ${event.of}")
         if (event is HistoryEntry.Event.Off && event.timerRanOut) add("Timer ran out")
         entry.room?.let { add("Room ${model.degrees(it)}") }
         if (entry.noticedLater) add("Seen when Lull reopened")
@@ -194,6 +216,7 @@ private fun EntryRow(model: AppModel, entry: HistoryEntry, isLast: Boolean) {
     val badge = 28.dp * LocalDensity.current.fontScale.coerceAtMost(1.6f)
     val icon: ImageVector = when {
         event is HistoryEntry.Event.Air -> event.mode.icon
+        event is HistoryEntry.Event.PhaseStarted -> event.phase.mode.icon
         event is HistoryEntry.Event.Off -> Icons.Filled.PowerSettingsNew
         event is HistoryEntry.Event.ScheduleStarted -> Icons.Filled.NightsStay
         event is HistoryEntry.Event.ScheduleEnded && event.ending is HistoryEntry.Ending.Early -> Icons.Filled.PriorityHigh
@@ -201,6 +224,7 @@ private fun EntryRow(model: AppModel, entry: HistoryEntry, isLast: Boolean) {
     }
     val tint: Color = when {
         event is HistoryEntry.Event.Air -> event.mode.tint
+        event is HistoryEntry.Event.PhaseStarted -> event.phase.mode.tint
         event is HistoryEntry.Event.ScheduleEnded && event.ending is HistoryEntry.Ending.Early -> Theme.warm
         event is HistoryEntry.Event.Off -> Theme.neutral
         else -> Color.White
