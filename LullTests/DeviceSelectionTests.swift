@@ -705,8 +705,8 @@ final class DeviceSelectionTests: XCTestCase {
         try await Task.sleep(nanoseconds: 2_000_000_000)
         let sent = unit(mine.id).sent
 
-        // Turbo, which a V2 lacks, and a BedJet forgotten since, or never known.
-        await model.applyQuickRemote(RemotePreset(mode: .turbo, minutes: 10, temperature: 86, fanPercent: 100), to: first.id)
+        // Dry, which a V2 lacks, and a BedJet forgotten since, or never known.
+        await model.applyQuickRemote(RemotePreset(mode: .dry, minutes: 45, temperature: 60, fanPercent: 60), to: first.id)
         await model.applyQuickRemote(RemotePreset.defaults[0], to: UUID())
         XCTAssertEqual(unit(mine.id).sent, sent)
         XCTAssertEqual(model.bedJet?.id, first.id)

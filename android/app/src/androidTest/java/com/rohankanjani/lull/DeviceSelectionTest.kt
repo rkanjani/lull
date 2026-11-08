@@ -806,8 +806,8 @@ class DeviceSelectionTest {
         delay(2_000)
         val sent = unit(mine.id).sent.toList()
 
-        // Turbo, which a V2 lacks, and a BedJet forgotten since, or never known.
-        model.applyQuickRemote(RemotePreset(Mode.TURBO, 10, 86, 100), to = first.id)
+        // Dry, which a V2 lacks, and a BedJet forgotten since, or never known.
+        model.applyQuickRemote(RemotePreset(Mode.DRY, 45, 60, 60), to = first.id)
         model.applyQuickRemote(RemotePreset.defaults[0], to = UUID.randomUUID().toString())
         assertEquals(sent, unit(mine.id).sent)
         assertEquals(first.id, model.bedJet?.id)
