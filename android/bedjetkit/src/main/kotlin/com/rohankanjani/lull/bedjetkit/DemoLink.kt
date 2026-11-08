@@ -16,6 +16,7 @@ class DemoLink(
     slots: List<StoredProgram?> = listOf(null, null, null),
     /** Where the one-second clock runs. The app passes its main scope. */
     private val scope: CoroutineScope? = null,
+    wifiNetwork: String? = null,
 ) : BedJetLink {
     override var state: LinkState = LinkState.SEARCHING
         private set(value) {
@@ -32,7 +33,12 @@ class DemoLink(
         private set
     var clock: Pair<Int, Int>? = null
         private set
-    override val lastStatus: DeviceStatus? get() = if (state == LinkState.READY) status else null
+    /** The Wi-Fi network the unit was given, which it needs to check for firmware. */
+    var wifiNetwork: String? = wifiNetwork
+        private set
+    var firmware = "V1.20 (demo)"
+        private set
+    override val lastStatus: DeviceStatus? get() = if (state == LinkState.READY) reported else null
     /** The step of the program running on the unit, connected or not; 0 when none is. */
     val programStep: Int get() = status.extra?.programStep ?: 0
 
@@ -50,6 +56,15 @@ class DemoLink(
 
     private var running: Run? = null
     private val pendingSteps = mutableMapOf<Int, List<ProgramStep>>()
+    /** The Wi-Fi phases still to report, one a second, like a unit joining a network or checking for firmware. */
+    private var wifiSteps = ArrayDeque<Int>()
+    /** Seconds left before the unit is back from restarting, as it does when asked to check for firmware. */
+    private var restarting = 0
+    /** Back from restarting, the unit's first report comes without its second half, as a real one's does. */
+    private var firstHalfOnly = false
+    /** Found newer firmware, so it restarts again to install it once it has said so. */
+    private var installsUpdate = false
+    private val reported: DeviceStatus get() = if (firstHalfOnly) status.copy(extra = null) else status
     private var timer: Job? = null
 
     override fun start() {
@@ -87,12 +102,21 @@ class DemoLink(
             bytes[0] == 0x08 && bytes.size >= 3 -> clock = bytes[1] to bytes[2]
             bytes[0] == 0x40 -> store(command)
         }
-        onStatus?.invoke(status)
+        // A unit that is restarting says nothing until it's back.
+        if (restarting == 0) onStatus?.invoke(reported)
+    }
+
+    /** Pretends the network works whatever the password, then reports its firmware as current when asked to check. */
+    override suspend fun writeWiFi(network: ByteArray, password: ByteArray) {
+        wifiNetwork = network.decodeToString()
+        wifiSteps = ArrayDeque(
+            listOf(Codec.WiFiPhase.STARTING, Codec.WiFiPhase.JOINING, Codec.WiFiPhase.JOINED, Codec.WiFiPhase.TESTING, Codec.WiFiPhase.WORKS),
+        )
     }
 
     override suspend fun query(request: Int): ByteArray = when (request) {
         Codec.Query.DEVICE_NAME -> name.encodeToByteArray() + 0
-        Codec.Query.FIRMWARE -> "V1.20 (demo)".encodeToByteArray() + 0
+        Codec.Query.FIRMWARE -> firmware.encodeToByteArray() + 0
         Codec.Query.PROGRAM_NAMES -> slots.fold(ByteArray(0)) { data, program ->
             val slot = ByteArray(16)
             if (program != null) {
@@ -134,6 +158,24 @@ class DemoLink(
             0x46, 0x47 -> status = status.copy(extra = status.extra?.copy(ledEnabled = button == 0x46))
             0x48, 0x49 -> status = status.copy(extra = status.extra?.copy(beepsMuted = button == 0x48))
             0x52 -> setNotification(0)
+            0x43 -> {
+                // Like the real unit, restart, which turns off the air and drops the connection for a few seconds, and
+                // check while away, so the result is there when it's back.
+                running = null
+                setProgramStep(0)
+                enter(Mode.STANDBY, 0)
+                restarting = 2
+                state = LinkState.CONNECTING
+                wifiSteps = if (wifiNetwork == null) {
+                    ArrayDeque(listOf(Codec.WiFiPhase.NO_NETWORK))
+                } else if (status.extra?.notification == Codec.Notification.UPDATE_AVAILABLE) {
+                    // Downloads the newer firmware once it's back, then restarts again to install it.
+                    installsUpdate = true
+                    ArrayDeque(listOf(Codec.WiFiPhase.CHECKING, Codec.WiFiPhase.UPDATING, Codec.WiFiPhase.UPDATING, Codec.WiFiPhase.INSTALLING))
+                } else {
+                    ArrayDeque(listOf(Codec.WiFiPhase.UP_TO_DATE))
+                }
+            }
             in 0x80..0x82 -> {
                 val slot = button - 0x80
                 val program = slots[slot] ?: return
@@ -205,6 +247,25 @@ class DemoLink(
         }
     }
 
+    /**
+     * Says newer firmware is available, as the real unit does when its update server has some. Only a unit on Wi-Fi
+     * hears of it, so it has a network.
+     */
+    fun offerFirmwareUpdate() {
+        setNotification(Codec.Notification.UPDATE_AVAILABLE)
+        if (wifiNetwork == null) wifiNetwork = "Home"
+    }
+
+    /** Restarts into the newer firmware, as the real unit does after saying it's restarting to install it. */
+    private fun installUpdate() {
+        installsUpdate = false
+        firmware = "V1.21 (demo)"
+        setNotification(0)
+        status = status.copy(extra = status.extra?.copy(wifiPhase = Codec.WiFiPhase.IDLE))
+        restarting = 3
+        state = LinkState.CONNECTING
+    }
+
     /** Pretends the running program started this much earlier, for demos that should show a night in progress. */
     fun skipAhead(minutes: Int) {
         val run = running ?: return
@@ -237,7 +298,17 @@ class DemoLink(
     }
 
     private fun tick() {
+        if (restarting > 0) {
+            restarting -= 1
+            if (restarting > 0) return
+            firstHalfOnly = true
+        } else {
+            firstHalfOnly = false
+        }
         if (state == LinkState.CONNECTING) state = LinkState.READY
+        if (installsUpdate && wifiSteps.isEmpty() && status.extra?.wifiPhase == Codec.WiFiPhase.INSTALLING) return installUpdate()
+        // A report without its second half has no Wi-Fi phase, so the next step waits for one that does.
+        if (!firstHalfOnly) wifiSteps.removeFirstOrNull()?.let { phase -> status = status.copy(extra = status.extra?.copy(wifiPhase = phase)) }
         running?.let { if (System.currentTimeMillis() >= it.stepEnds) advanceProgram(it.stepEnds) }
         if (status.mode != Mode.STANDBY && status.mode != Mode.WAIT) {
             status = status.copy(remainingSeconds = maxOf(0, status.remainingSeconds - 1))
@@ -245,6 +316,6 @@ class DemoLink(
         }
         val goal = if (status.mode == Mode.STANDBY || status.mode == Mode.WAIT) status.ambientTemperature else status.targetTemperature
         status = status.copy(actualTemperature = status.actualTemperature + (goal - status.actualTemperature).sign)
-        onStatus?.invoke(status)
+        onStatus?.invoke(reported)
     }
 }

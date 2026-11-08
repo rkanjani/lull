@@ -169,8 +169,10 @@ final class AppModel {
         if let makesLink { return makesLink(bedJet) }
         guard bedJet.isDemo else { return BLELink(unit: bedJet.unit) }
         let demo = DemoLink(name: bedJet.name ?? DemoLink.defaultName,
-                            slots: [StoredProgram(name: "Summer nights", steps: Schedule.templates[2].program.steps), nil, nil])
+                            slots: [StoredProgram(name: "Summer nights", steps: Schedule.templates[2].program.steps), nil, nil],
+                            wifiNetwork: bedJet.wifiNetwork)
         demo.answers = !(Self.demoFirstUnitAway && bedJet.unit == DemoDiscovery.simulated[0].id)
+        if Self.demoOffersFirmwareUpdate { demo.offerFirmwareUpdate() }
         return demo
     }
 
@@ -288,6 +290,8 @@ final class AppModel {
     static let demoStartsUnchosen = ProcessInfo.processInfo.arguments.contains("-demoChoose")
     /// Launching with `-demoFirstUnitAway` makes the first simulated BedJet never answer, as if it were unplugged.
     static let demoFirstUnitAway = ProcessInfo.processInfo.arguments.contains("-demoFirstUnitAway")
+    /// Launching with `-demoFirmwareUpdate` makes the simulated BedJets say newer firmware is available.
+    static let demoOffersFirmwareUpdate = ProcessInfo.processInfo.arguments.contains("-demoFirmwareUpdate")
 
     private func load() {
         let saved = storage.file("lull.json").flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(Saved.self, from: $0) }

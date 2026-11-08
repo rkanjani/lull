@@ -59,6 +59,21 @@ struct RootView: View {
         } message: {
             Text("Lull keeps tonight's schedule in one slot on the BedJet. Pick one to reuse. Everything on the BedJet is already copied into your schedules.")
         }
+        .alert(FirmwareCopy.title(bedJet.firmwarePrompt), isPresented: .init(get: { bedJet.firmwarePrompt != nil }, set: { _ in }),
+               presenting: bedJet.firmwarePrompt) { prompt in
+            if prompt == .available {
+                Button("Update Now") {
+                    // Answered straight away, so the alert doesn't come back before the update begins.
+                    bedJet.deferFirmwareUpdate()
+                    Task { await bedJet.updateFirmware(offered: true) }
+                }
+                Button("Not Now", role: .cancel) { bedJet.deferFirmwareUpdate() }
+            } else {
+                Button("OK", role: .cancel) { bedJet.dismissFirmwareResult() }
+            }
+        } message: { prompt in
+            Text(FirmwareCopy.message(prompt, for: model.title(of: bedJet)))
+        }
     }
 
     private func handle(_ command: AppCommands.Command) {
@@ -70,6 +85,31 @@ struct RootView: View {
             // A night already under way, from this phone or another, is left running and shown.
             guard let bedJet = model.bedJet, bedJet.run == nil, bedJet.runningElsewhereStep == nil, !bedJet.isBusy else { return }
             Task { await bedJet.startTonight() }
+        }
+    }
+}
+
+/// The BedJet fetches its own firmware, so Lull only asks and reports back.
+enum FirmwareCopy {
+    static let howItWorks = "Your BedJet downloads it over its own Wi-Fi and restarts, which can take a few minutes. Keep it plugged in until Lull reconnects."
+    static let waitsForIdle = "Turn the air off and end any schedule first. Your BedJet restarts to check for updates."
+    static let confirmMessage = "Your BedJet restarts to check. If there's a newer version, it downloads and installs it straight away, which can take a few minutes. Keep it plugged in until it's back."
+
+    static func button(available: Bool) -> String { available ? "Update Firmware" : "Check for Update" }
+    static func confirmTitle(available: Bool) -> String { available ? "Update your BedJet's firmware?" : "Check for a firmware update?" }
+
+    static func title(_ prompt: BedJet.FirmwarePrompt?) -> String {
+        switch prompt {
+        case .finished(let activity)?:
+            activity.failed ? "Couldn't update your BedJet" : activity.installed != nil ? "BedJet updated" : "BedJet up to date"
+        default: "Firmware update available"
+        }
+    }
+
+    static func message(_ prompt: BedJet.FirmwarePrompt, for name: String) -> String {
+        switch prompt {
+        case .available: "New firmware is ready for \(name). " + howItWorks
+        case .finished(let activity): activity.installed.map { "\(name) is now on firmware \($0)." } ?? activity.outcome ?? ""
         }
     }
 }
@@ -99,6 +139,10 @@ private struct Announcements: View {
             }
             .onChange(of: bedJet.run?.schedule.name) { old, name in
                 if let name { announce("Started \(name)") } else if old != nil { announce("Night ended") }
+            }
+            // Joining Wi-Fi or checking for firmware takes a while, so how it went is said when it's over.
+            .onChange(of: bedJet.wifiActivity?.outcome) { _, outcome in
+                if let outcome { announce(outcome) }
             }
     }
 

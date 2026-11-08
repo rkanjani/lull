@@ -1,10 +1,5 @@
-Lull now works with more than one BedJet, and you choose which ones.
+Keep your BedJet 3 up to date without the official app.
 
-• Pick your BedJet from a list of those nearby, with their signal strength. Lull only connects to BedJets you picked, so it never ends up on your partner's.
-• Connect to several BedJets at once, for example one on each side of the bed, and switch between them from the top of the screen. Each has its own schedule and history.
-• Give each BedJet a nickname, such as "My side".
-
-Also new:
-• Widgets for the Home Screen, Lock Screen and StandBy show tonight's schedule, the night in progress and last night.
-• Start your night from Control Center, the Action button or Siri.
-• Lull works fully with VoiceOver and larger text, with higher contrast throughout.
+• Check for a firmware update from the BedJet sheet. Your BedJet downloads it over its own Wi-Fi and installs it, and Lull tells you when it's back on the new version.
+• When your BedJet says newer firmware is available, Lull offers it once the air is off.
+• Give your BedJet 3 the Wi-Fi network it uses for updates, by name. Lull remembers the name, never the password, and still never asks for your location.

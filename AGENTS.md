@@ -69,8 +69,8 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Release | `fastlane ios release`, `.github/workflows/app-store.yml` | `fastlane android release`, `.github/workflows/play-store.yml` |
 
 Launch flags match too: `-ephemeral`, `-demoElapsedMinutes`, `-demoLabelConnected`, `-demoHistory`,
-`-demoChoose`, `-demoFirstUnitAway` and `-logConnections` on iOS are the intent extras of the same names on
-Android.
+`-demoChoose`, `-demoFirstUnitAway`, `-demoFirmwareUpdate` and `-logConnections` on iOS are the intent extras of the
+same names on Android.
 
 A BedJet's unit is its `CBPeripheral.identifier` on iOS and its Bluetooth address on Android. Each phone knows
 a unit by its own identifier, so the short code shown after a shared name differs between an iPhone and an

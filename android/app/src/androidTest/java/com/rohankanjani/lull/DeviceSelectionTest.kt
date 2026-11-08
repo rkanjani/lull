@@ -254,6 +254,134 @@ class DeviceSelectionTest {
         assertEquals(guest.id, model.bedJet?.unit)
     }
 
+    /**
+     * A real BedJet 3 sends each report in two halves, and right after reconnecting, such as after restarting to check
+     * for firmware, only the first half comes for a moment. Its settings stay shown meanwhile, so the sheet holds still.
+     */
+    @Test
+    fun settingsStayWhileAReportsSecondHalfIsLate() = onMain {
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        waitUntil("a full report") { bedJet.settings != null }
+        val settings = bedJet.settings
+        unit(mine.id).report(bedJet.status!!.copy(extra = null))
+        assertNull(bedJet.status?.extra)
+        assertEquals(settings, bedJet.settings)
+    }
+
+    /**
+     * A BedJet checking for firmware restarts partway through, by itself or for another phone, so nothing is sent
+     * meanwhile: not a command, not a night, not another check or network.
+     */
+    @Test
+    fun nothingIsSentWhileTheBedJetChecksForFirmware() = onMain {
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        waitUntil("a full report") { bedJet.settings != null }
+        val checking = bedJet.status!!.let { it.copy(extra = it.extra?.copy(wifiPhase = Codec.WiFiPhase.CHECKING)) }
+        unit(mine.id).report(checking)
+        assertFalse(bedJet.canControl)
+        assertFalse(bedJet.canUpdateFirmware)
+        assertFalse(bedJet.canJoinWiFi)
+
+        val sentBefore = unit(mine.id).sent.size
+        bedJet.setMode(Mode.HEAT)
+        bedJet.startTonight()
+        bedJet.updateFirmware()
+        assertEquals(sentBefore, unit(mine.id).sent.size)
+        assertNotNull(model.errorMessage)
+
+        // Done: the result stays in the report, and the BedJet is free again.
+        unit(mine.id).report(checking.copy(extra = checking.extra?.copy(wifiPhase = Codec.WiFiPhase.UP_TO_DATE)))
+        assertTrue(bedJet.canControl)
+        assertTrue(bedJet.canUpdateFirmware)
+    }
+
+    /** Restarting to install firmware lasts until the BedJet restarts. It may still say so once it's back. */
+    @Test
+    fun restartingToInstallOnlyHoldsUntilTheBedJetRestarts() = onMain {
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        waitUntil("a full report") { bedJet.settings != null }
+        val installing = bedJet.status!!.let { it.copy(extra = it.extra?.copy(wifiPhase = Codec.WiFiPhase.INSTALLING)) }
+        unit(mine.id).report(installing)
+        assertFalse(bedJet.canControl)
+
+        // Gone, so restarted: the same result showing afterwards is the one from before.
+        unit(mine.id).stop()
+        unit(mine.id).report(installing)
+        assertTrue(bedJet.canControl)
+    }
+
+    /**
+     * Like a real BedJet 3, the simulated one restarts to check, downloads the newer firmware it offered, then
+     * restarts into it. Lull holds on to it throughout, and says what it's on once it's back.
+     */
+    @Test
+    fun anOfferedUpdateIsInstalledAndSaidOnceBack() = onMain {
+        setups[mine.id] = { it.device.offerFirmwareUpdate() }
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        waitUntil("the offer") { bedJet.firmwarePrompt == BedJet.FirmwarePrompt.Available }
+        bedJet.deferFirmwareUpdate()
+        bedJet.updateFirmware(offered = true)
+        assertTrue(bedJet.expectsRestart)
+        assertFalse(bedJet.canControl)
+        assertNull(bedJet.firmwarePrompt)
+
+        waitUntil("the BedJet to be back on the new firmware", timeoutMillis = 30_000) { bedJet.firmware == "V1.21 (demo)" }
+        val prompt = bedJet.firmwarePrompt as? BedJet.FirmwarePrompt.Finished ?: return@onMain fail("How it went wasn't said")
+        assertEquals("V1.21 (demo)", prompt.activity.installed)
+        assertFalse(bedJet.expectsRestart)
+        assertTrue(bedJet.canControl)
+        assertEquals(1, unit(mine.id).sent.count { it == Codec.updateFirmware.toList() })
+        bedJet.dismissFirmwareResult()
+        assertNull(bedJet.firmwarePrompt)
+    }
+
+    /** Updating restarts the BedJet, so it waits for the air to be off and the night to be over. */
+    @Test
+    fun anUpdateWaitsForTheAirToBeOff() = onMain {
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        waitUntil("a report") { bedJet.status != null }
+        assertTrue(bedJet.canUpdateFirmware)
+        bedJet.setMode(Mode.HEAT)
+        waitUntil("the air to be on") { bedJet.status?.mode == Mode.HEAT }
+        assertFalse(bedJet.canUpdateFirmware)
+        bedJet.updateFirmware()
+        assertFalse(Codec.updateFirmware.toList() in unit(mine.id).sent)
+        bedJet.setMode(Mode.STANDBY)
+        waitUntil("the air to be off") { bedJet.status?.mode == Mode.STANDBY }
+        assertTrue(bedJet.canUpdateFirmware)
+    }
+
+    /**
+     * The BedJet's word that newer firmware is available is offered once and then waits in the sheet. Lull leaves
+     * it for the BedJet to clear, so other phones and the official app still see it.
+     */
+    @Test
+    fun anOfferedUpdateIsAskedAboutOnceAndLeftSet() = onMain {
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        waitUntil("a full report") { bedJet.settings != null }
+        val offered = bedJet.status!!.let { it.copy(extra = it.extra?.copy(notification = Codec.Notification.UPDATE_AVAILABLE)) }
+        unit(mine.id).report(offered)
+        assertTrue(bedJet.updateAvailable)
+        assertEquals(BedJet.FirmwarePrompt.Available, bedJet.firmwarePrompt)
+
+        bedJet.deferFirmwareUpdate()
+        assertNull(bedJet.firmwarePrompt)
+        assertTrue(bedJet.updateAvailable)
+        assertFalse(Codec.acknowledgeNotification.toList() in unit(mine.id).sent)
+    }
+
     @Test
     fun aCommandMeantForOneBedJetNeverReachesAnother() = onMain {
         val model = launch()
