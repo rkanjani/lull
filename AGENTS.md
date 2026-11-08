@@ -131,14 +131,20 @@ Platform conventions, not behaviour:
   (Android 16's first release, as seen on its emulator), it stays an ordinary ongoing notification. Android
   asks for the notification permission the first time a BedJet runs; iOS asks on the Lock Screen whether to
   allow Live Activities. iOS draws the night's curve and lights it up to the current time by itself; Android
-  shows the phases as a segmented progress bar. Android can wake briefly while Lull is closed, so it moves
-  that bar along every few minutes and on to each new phase, and takes the Live Update down when the night or
-  timer ends. iOS can't run Lull while it's closed, so its Live Activity hides the phase once it may be out of
+  shows the phases as a segmented progress bar. Android can run briefly while Lull is closed, so while the
+  phone is awake it moves that bar along every few minutes and on to each new phase, it wakes the phone to take
+  out a BedJet that finished beside another, and it takes the Live Update down when the night or timer ends.
+  Neither brings back one that was swiped away, or whose notifications were turned off, while Lull is closed. iOS can't run Lull while it's closed, so its Live Activity hides the phase once it may be out of
   date and keeps a finished night at 0:00 until Lull is opened; iOS also ends any Live Activity after 8 hours.
   With a BedJet on each side of the bed, both share one Live Activity and one Live Update, under one icon made of
   both their modes, since the Dynamic Island shows only one of an app's Live Activities; a third isn't shown. The
   Dynamic Island counts both down and draws a row for each; Android's notification has a line for each and counts
-  down to whichever ends first, and draws a night's progress bar only for a single BedJet.
+  down to whichever ends first, and draws a night's progress bar only for a single BedJet. Tapping a side's row
+  in the Live Activity opens that BedJet; a notification can't link each line, so tapping the Live Update
+  opens the first BedJet in it. ActivityKit takes at most 4 KB, so the Live Activity carries each night
+  without its schedule's IDs; Android's Live Update is built on the phone and carries whole schedules. With
+  two BedJets, iOS hides a night's phase once any phase may be out of date, but not at the other side's end,
+  which only takes that side's countdown to 0:00; Android redraws instead, and takes the finished side out.
   In StandBy, on an iPhone charging on its side, the Live Activity fills the screen with a layout of its own;
   Android has no StandBy.
 - iOS widget UI tests place the widgets on the Home and Lock Screens through Springboard. Android's draw each

@@ -17,7 +17,8 @@ struct RootView: View {
         }
         // Widgets open the tab they show; controls and Shortcuts send commands.
         .onOpenURL { url in
-            // A link can name its BedJet, so tapping one side of the bed opens that side.
+            // A link can name its BedJet: each side of the bed in the Live Activity opens its own. Android's Live Update
+            // opens the first, since a notification can't link each side's line.
             if let id = LullTab.bedJet(in: url) { model.select(id) }
             if let tab = LullTab(url: url) { selectedTab = tab }
         }

@@ -93,7 +93,8 @@ fun RootScreen(model: AppModel) {
         AppCommands.handler = { command ->
             when (command) {
                 is AppCommands.Command.Show -> {
-                    // A link can name its BedJet, so tapping one side of the bed opens that side.
+                    // A link can name its BedJet: the Live Update opens the first BedJet in it, since a notification can't
+                    // link each side's line. The iPhone's Live Activity opens each side's own.
                     command.bedJet?.let(model::select)
                     selectedTab = command.tab.ordinal
                 }
