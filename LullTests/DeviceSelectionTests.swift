@@ -403,6 +403,179 @@ final class DeviceSelectionTests: XCTestCase {
         XCTAssertEqual(model.bedJets.count, 1)
         XCTAssertFalse(model.bedJet?.isDemo ?? true)
     }
+
+    // MARK: The Remote's timer
+
+    /// Opens Lull on `mine` as an earlier launch left it, with the Remote's timer saved as given.
+    private func launch(longestEnds: Date?, timerEnds: Date?) throws -> AppModel {
+        let saved = SavedBedJet(unit: mine.id, name: mine.name, generation: .v3, longestEnds: longestEnds, timerEnds: timerEnds)
+        try write(SeveralBedJetsSave(schedules: Schedule.templates, fleet: .init(bedJets: [saved], selected: saved.id)), to: "lull.json")
+        return launch()
+    }
+
+    private func timerCommands(_ unit: FakeLink, after count: Int = 0) -> [Data] {
+        unit.sent.dropFirst(count).filter { $0.first == Codec.setRuntime(minutes: 0).first }
+    }
+
+    private func remainingSeconds(_ unit: FakeLink) throws -> Int {
+        try XCTUnwrap(unit.lastStatus?.remainingSeconds)
+    }
+
+    func testAPickedTimeKeepsCountingDownAfterLullIsClosed() async throws {
+        // An hour was picked, and 45 minutes are left when Lull is opened again and the fan changed.
+        let unit = unit(mine.id)
+        try await unit.device.send(XCTUnwrap(Codec.setMode(.cool)))
+        try await unit.device.send(Codec.setRuntime(minutes: 45))
+        let model = try launch(longestEnds: nil, timerEnds: nil)
+        let bedJet = try await connected(mine, in: model)
+
+        await bedJet.setFan(percent: 50)
+        XCTAssertEqual(timerCommands(unit), [])
+        XCTAssertEqual(try remainingSeconds(unit), 45 * 60, accuracy: 15)
+    }
+
+    func testTheLongestRunKeepsItsEndAsTheFanChanges() async throws {
+        // Cool was chosen on the Remote 45 minutes ago, which gave it 12 hours.
+        let unit = unit(mine.id)
+        try await unit.device.send(XCTUnwrap(Codec.setMode(.cool)))
+        try await unit.device.send(Codec.setRuntime(minutes: 675))
+        let ends = Date().addingTimeInterval(675 * 60)
+        let model = try launch(longestEnds: ends, timerEnds: ends)
+        let bedJet = try await connected(mine, in: model)
+
+        await bedJet.setFan(percent: 50)
+        XCTAssertEqual(timerCommands(unit), [])
+        XCTAssertEqual(try remainingSeconds(unit), 675 * 60, accuracy: 15)
+    }
+
+    func testHeatGetsBackTheTimeItWasCutButNoMore() async throws {
+        // Heat was chosen 90 minutes ago with 4 hours allowed, until 40 °C at 40% fan cut what was left to 2 hours.
+        let unit = unit(mine.id)
+        try await unit.device.send(XCTUnwrap(Codec.setMode(.heat)))
+        try await unit.device.send(Codec.setTemperature(80))
+        try await unit.device.send(Codec.setRuntime(minutes: 120))
+        let model = try launch(longestEnds: Date().addingTimeInterval(150 * 60), timerEnds: Date().addingTimeInterval(120 * 60))
+        let bedJet = try await connected(mine, in: model)
+
+        // A gentler fan lets Heat run 4 hours again: the cut half hour comes back, but the run still ends when it would have.
+        await bedJet.setFan(percent: 5)
+        XCTAssertEqual(timerCommands(unit), [Codec.setRuntime(minutes: 150)])
+        XCTAssertEqual(try remainingSeconds(unit), 150 * 60, accuracy: 15)
+    }
+
+    func testATimeSetElsewhereIsLeftAlone() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        await bedJet.setMode(.cool)
+        let unit = unit(mine.id)
+        XCTAssertEqual(try remainingSeconds(unit), 720 * 60, accuracy: 15)
+
+        // From another phone, or the BedJet's own remote.
+        try await unit.device.send(Codec.setRuntime(minutes: 90))
+        let sent = unit.sent.count
+        await bedJet.setFan(percent: 50)
+        XCTAssertEqual(timerCommands(unit, after: sent), [])
+        XCTAssertEqual(try remainingSeconds(unit), 90 * 60, accuracy: 15)
+    }
+
+    func testATimePickedWhileTheModeIsStillStartingWins() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        // Cool waits for the BedJet to report it before giving it its longest run.
+        let choosing = Task { await bedJet.setMode(.cool) }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await bedJet.setRuntime(minutes: 180)
+        await choosing.value
+
+        XCTAssertEqual(try remainingSeconds(unit(mine.id)), 180 * 60, accuracy: 15)
+    }
+
+    func testAPickedTimeIsSavedForTheNextLaunch() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        await bedJet.setMode(.cool)
+        await bedJet.setRuntime(minutes: 180)
+
+        model.appMovedToBackground()
+        let relaunched = launch()
+        let again = try await connected(mine, in: relaunched)
+        let unit = unit(mine.id)
+        let sent = unit.sent.count
+        await again.setFan(percent: 50)
+        XCTAssertEqual(timerCommands(unit, after: sent), [])
+        XCTAssertEqual(try remainingSeconds(unit), 180 * 60, accuracy: 15)
+    }
+
+    func testATimePickedWhileAnotherPhoneHandsTheBedJetOverWins() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        let unit = unit(mine.id)
+        // Cool is tapped, and a time picked while the BedJet is still taking it.
+        unit.holdsSends = true
+        let choosing = Task { await bedJet.setMode(.cool) }
+        try await waitUntil("Cool to be in flight") { unit.heldCount == 1 }
+        let picking = Task { await bedJet.setRuntime(minutes: 180) }
+        try await waitUntil("the time to be in flight") { unit.heldCount == 2 }
+        unit.releaseFirst()
+        try await waitUntil("the BedJet to take Cool") { unit.lastStatus?.mode == .cool }
+        unit.release()
+        await picking.value
+        await choosing.value
+
+        XCTAssertEqual(try remainingSeconds(unit), 180 * 60, accuracy: 15)
+    }
+
+    func testHeatStillGetsBackItsTimeWhenAChangeIsReplaced() async throws {
+        // Heat at 40 °C with the gentlest fan was chosen on the Remote, and 150 of its 4 hours are left.
+        let unit = unit(mine.id)
+        try await unit.device.send(XCTUnwrap(Codec.setMode(.heat)))
+        try await unit.device.send(Codec.setTemperature(80))
+        try await unit.device.send(Codec.setFan(step: 0))
+        try await unit.device.send(Codec.setRuntime(minutes: 150))
+        let ends = Date().addingTimeInterval(150 * 60)
+        let model = try launch(longestEnds: ends, timerEnds: ends)
+        let bedJet = try await connected(mine, in: model)
+
+        // A stronger fan cuts Heat to 2 hours, and a newer slider move replaces it before Lull reads the timer back.
+        let stronger = Task { await bedJet.setFan(percent: 40) }
+        try await waitUntil("the stronger fan to be sent") { unit.sent.contains(Codec.setFan(step: 7)) }
+        stronger.cancel()
+        await stronger.value
+        XCTAssertEqual(try remainingSeconds(unit), 120 * 60, accuracy: 15)
+
+        let sent = unit.sent.count
+        await bedJet.setFan(percent: 5)
+        XCTAssertEqual(timerCommands(unit, after: sent), [Codec.setRuntime(minutes: 150)])
+        XCTAssertEqual(try remainingSeconds(unit), 150 * 60, accuracy: 15)
+    }
+
+    func testTurningTheAirOffForgetsTheRemotesTimer() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        await bedJet.setMode(.cool)
+        XCTAssertNotNil(bedJet.saved.longestEnds)
+
+        await bedJet.setMode(.standby)
+        XCTAssertNil(bedJet.saved.longestEnds)
+        XCTAssertNil(bedJet.saved.timerEnds)
+    }
+
+    func testADamagedSaveNeverSetsTheTimer() async throws {
+        let unit = unit(mine.id)
+        try await unit.device.send(XCTUnwrap(Codec.setMode(.cool)))
+        try await unit.device.send(Codec.setRuntime(minutes: 675))
+        let model = try launch(longestEnds: .distantPast, timerEnds: Date().addingTimeInterval(675 * 60))
+        let bedJet = try await connected(mine, in: model)
+
+        await bedJet.setFan(percent: 50)
+        XCTAssertEqual(timerCommands(unit), [])
+        XCTAssertEqual(try remainingSeconds(unit), 675 * 60, accuracy: 15)
+    }
 }
 
 /// A BedJet for tests. It speaks like the simulated one, but connects only when allowed, records every command,
@@ -417,6 +590,7 @@ final class FakeLink: BedJetLink {
     private(set) var stops = 0
     private var held: [CheckedContinuation<Void, Never>] = []
     var isHolding: Bool { !held.isEmpty }
+    var heldCount: Int { held.count }
 
     var onStateChange: ((LinkState) -> Void)?
     var onStatus: ((DeviceStatus) -> Void)?
@@ -462,6 +636,12 @@ final class FakeLink: BedJetLink {
         let waiting = held
         held = []
         for continuation in waiting { continuation.resume() }
+    }
+
+    /// Lets only the oldest command in flight through; the rest stay held.
+    func releaseFirst() {
+        guard !held.isEmpty else { return }
+        held.removeFirst().resume()
     }
 
     /// A status report, however late it arrives.
