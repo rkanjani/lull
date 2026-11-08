@@ -3,6 +3,7 @@ package com.rohankanjani.lull
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.rohankanjani.lull.bedjetkit.Generation
 import com.rohankanjani.lull.bedjetkit.Limits
 import com.rohankanjani.lull.bedjetkit.Mode
 import com.rohankanjani.lull.bedjetkit.ProgramStep
@@ -127,6 +128,10 @@ data class ActiveRun(val schedule: Schedule, val startedAt: Long) {
     }
 }
 
+/** What this phase is set to on a kind of BedJet, such as "75° · Fan 40%", worded like the schedule editor. */
+fun Phase.setting(on: Generation, fahrenheit: Boolean): String =
+    Format.setting(mode, temperature.takeIf { on.adjustsTemperature(mode) }, fanPercent, fahrenheit)
+
 /** Modes a phase can use, in the order the editor offers them. */
 val phaseModes = listOf(Mode.COOL, Mode.HEAT, Mode.EXTENDED_HEAT, Mode.TURBO, Mode.DRY, Mode.WAIT)
 val remoteModes = listOf(Mode.COOL, Mode.HEAT, Mode.EXTENDED_HEAT, Mode.TURBO, Mode.DRY)
@@ -208,6 +213,18 @@ object Format {
     fun degrees(halfCelsius: Int, fahrenheit: Boolean): Int {
         val celsius = halfCelsius / 2.0
         return (if (fahrenheit) celsius * 9 / 5 + 32 else celsius).roundHalfAwayFromZero()
+    }
+
+    /**
+     * What a phase or the Remote is set to, such as "75° · Fan 40%", worded like the schedule editor. The temperature
+     * is null for modes that don't let you set it.
+     */
+    fun setting(mode: Mode, temperature: Int?, fanPercent: Int, fahrenheit: Boolean): String {
+        val parts = buildList {
+            if (temperature != null) add("${degrees(temperature, fahrenheit)}°")
+            if (mode.usesFan) add("Fan $fanPercent%")
+        }
+        return parts.ifEmpty { listOf("Air off") }.joinToString(" · ")
     }
 
     fun halfCelsius(fromDegrees: Int, fahrenheit: Boolean): Int {

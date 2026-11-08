@@ -73,6 +73,13 @@ class MainActivity : ComponentActivity() {
             val askForBluetooth = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
                 model.permissionsChanged()
             }
+            val askForNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+                model.notificationPermissionAnswered()
+            }
+            // Asked the first time a BedJet runs, when the Live Update it allows would appear.
+            LaunchedEffect(model.wantsNotificationPermission) {
+                if (model.wantsNotificationPermission) askForNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
             LaunchedEffect(model.demoMode) {
                 val granted = bluetoothPermissions.all {
                     ContextCompat.checkSelfPermission(this@MainActivity, it) == PackageManager.PERMISSION_GRANTED

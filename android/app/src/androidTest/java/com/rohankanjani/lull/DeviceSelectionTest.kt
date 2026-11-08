@@ -668,6 +668,24 @@ class DeviceSelectionTest {
         assertEquals(emptyList<List<Byte>>(), timerCommands(unit))
         assertAbout(675 * 60, remainingSeconds(unit))
     }
+
+    // Turning off
+
+    @Test
+    fun turningOffStopsShowingTheBedJetBeforeItReports() = onMain {
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        bedJet.setMode(Mode.HEAT)
+        assertNotNull(LiveStatus.of(bedJet.run, bedJet.status, bedJet.statusReceivedAt, bedJet.generation))
+
+        // Lull lets go of the BedJet once it leaves the screen, which can be before the BedJet says it's off. It took
+        // the command, so it's no longer shown as running.
+        unit(mine.id).reports = false
+        bedJet.setMode(Mode.STANDBY)
+        assertEquals(Mode.STANDBY, bedJet.status?.mode)
+        assertNull(LiveStatus.of(bedJet.run, bedJet.status, bedJet.statusReceivedAt, bedJet.generation))
+    }
 }
 
 /**
@@ -683,6 +701,8 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
     override var generation: Generation = Generation.V3
     var answers = true
     var holdsSends = false
+    /** Off, the unit takes commands but its reports never arrive, as when Lull lets go of it first. */
+    var reports = true
     val sent = mutableListOf<List<Byte>>()
     var stops = 0
         private set
@@ -701,7 +721,7 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
 
     private fun attach() {
         device.onStateChange = { onStateChange?.invoke(it) }
-        device.onStatus = { onStatus?.invoke(it) }
+        device.onStatus = { if (reports) onStatus?.invoke(it) }
     }
 
     override fun start() {

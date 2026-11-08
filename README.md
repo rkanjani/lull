@@ -22,6 +22,9 @@ room, or run out of battery; the night keeps going.
   StandBy, last night at a glance, and Start Night in Control Center and Siri. On Android, Home Screen
   widgets, Quick Settings tiles and app shortcuts. Widgets read what the app last saved, so they work while
   the phone is away from the BedJet.
+- **Live Activity**: while a night or the Remote is running, its time left shows in the Dynamic Island and on the
+  Lock Screen, with both sides of the bed together when two BedJets run. On Android, a Live Update in the status bar
+  does the same.
 - **Two phones, one BedJet**: the BedJet only accepts one connection, so Lull hands it over between
   phones automatically, iPhone or Android.
 - **Your BedJet, never a neighbour's**: you pick your BedJet from the ones nearby, and Lull only ever

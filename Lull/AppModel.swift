@@ -42,6 +42,7 @@ final class AppModel {
         didSet {
             storage.defaults.set(useFahrenheit, forKey: "useFahrenheit")
             publishWidgets()
+            publishLiveActivities()
         }
     }
     var demoMode: Bool {
@@ -62,6 +63,7 @@ final class AppModel {
     @ObservationIgnored private let makesDiscovery: (Bool) -> BedJetDiscovery
     @ObservationIgnored private var discovery: BedJetDiscovery?
     @ObservationIgnored private var lookers = 0
+    @ObservationIgnored private let liveActivities = LiveActivities()
     private var isLoaded = false
     /// The BedJets of the mode not in use, kept as they were saved.
     private var otherFleet: Fleet?
@@ -345,6 +347,7 @@ final class AppModel {
     func save() {
         guard isLoaded else { return }
         publishWidgets()
+        publishLiveActivities()
         guard let file = storage.file("lull.json") else { return }
         let saved = Saved(schedules: schedules, fleet: demoMode ? otherFleet : fleet, demoFleet: demoMode ? fleet : otherFleet)
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -367,5 +370,29 @@ final class AppModel {
         guard snapshot.save() else { return }
         WidgetCenter.shared.reloadAllTimelines()
         ControlCenter.shared.reloadAllControls()
+    }
+
+    // MARK: Live Activities
+
+    /// Shows the running BedJets in the Dynamic Island and on the Lock Screen, and takes out any that stopped, were
+    /// forgotten or belong to the other mode.
+    func publishLiveActivities() {
+        // UI tests (`-ephemeral`) start nights too, and would leave Live Activities behind them.
+        guard isLoaded, storage.publishesWidgets, !Self.isEphemeral else { return }
+        var wanted: [(id: UUID, wanted: LiveActivities.Wanted)] = []
+        for bedJet in bedJets {
+            // Starting a night reports the BedJet's program before the night is known here; what's up stays until then
+            // and moves straight on to the night, rather than ending and starting over.
+            if bedJet.isSavingSchedule {
+                wanted.append((bedJet.id, .keep))
+            } else if let status = LiveStatus.of(run: bedJet.run, status: bedJet.status, reportedAt: bedJet.statusReceivedAt,
+                                                 generation: bedJet.generation) {
+                wanted.append((bedJet.id, .show(.init(id: bedJet.id, status: status, name: title(of: bedJet),
+                                                       generation: bedJet.generation))))
+            } else if bedJet.status == nil {
+                wanted.append((bedJet.id, .keep))
+            }
+        }
+        liveActivities.show(wanted, useFahrenheit: useFahrenheit)
     }
 }

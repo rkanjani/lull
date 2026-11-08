@@ -103,6 +103,11 @@ class WidgetTest {
         for (tab in LullTab.entries) assertEquals(tab, LullTab.from(tab.link))
         assertNull(LullTab.from("lull://settings"))
         assertNull(LullTab.from("https://schedule"))
+        // A link can also name its BedJet.
+        val link = LullTab.SCHEDULE.link(showing = "E9D74769-E58C-42BE-BBA6-E7388B99FF52")
+        assertEquals(LullTab.SCHEDULE, LullTab.from(link))
+        assertEquals("E9D74769-E58C-42BE-BBA6-E7388B99FF52", LullTab.bedJet(link))
+        assertNull(LullTab.bedJet(LullTab.REMOTE.link))
     }
 
     @Test

@@ -92,7 +92,12 @@ fun RootScreen(model: AppModel) {
     DisposableEffect(Unit) {
         AppCommands.handler = { command ->
             when (command) {
-                is AppCommands.Command.Show -> selectedTab = command.tab.ordinal
+                is AppCommands.Command.Show -> {
+                    // A link can name its BedJet: the Live Update opens the first BedJet in it, since a notification can't
+                    // link each side's line. The iPhone's Live Activity opens each side's own.
+                    command.bedJet?.let(model::select)
+                    selectedTab = command.tab.ordinal
+                }
                 AppCommands.Command.StartNight -> {
                     selectedTab = LullTab.SCHEDULE.ordinal
                     // A night already under way, from this phone or another, is left running and shown.
