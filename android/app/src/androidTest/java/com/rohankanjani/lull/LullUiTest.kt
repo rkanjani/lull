@@ -325,10 +325,9 @@ class LullUiTest {
         compose.waitFor(hasText("Network"), timeoutMillis = 10_000)
         compose.onNodeWithText("Network").performScrollTo().performClick()
 
-        // A demo BedJet's phone is on a pretend network, offered first, and the simulated BedJet joins any network,
-        // testing it one step a second.
-        compose.waitFor(hasContentDescription("Home, This phone's network"))
-        compose.onNode(hasContentDescription("Home, This phone's network")).assertIsSelected()
+        // The network's name is typed, and the simulated BedJet joins any network, testing it one step a second.
+        compose.waitFor(hasContentDescription("Name"))
+        compose.onNode(hasContentDescription("Name")).performTextInput("Home")
         compose.onNode(hasContentDescription("Password")).performTextInput("12345678")
         compose.onNodeWithText("Join Network").performClick()
         // What the BedJet is doing takes the button's title, and how it went goes below once the title is back.

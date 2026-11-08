@@ -231,58 +231,35 @@ private struct WiFiOutcomeRow: View {
     }
 }
 
-/// Gives a BedJet 3 the Wi-Fi network it fetches firmware over: the one this iPhone is on, or any name, such as a
-/// hidden network's. Lull remembers the name it gave, never the password.
+/// Gives a BedJet 3 the Wi-Fi network it fetches firmware over, by name. Seeing the networks around would need
+/// location access, which Lull never asks for. Lull remembers the name it gave, never the password.
 struct WiFiSetup: View {
     @Environment(BedJet.self) private var bedJet
     @Environment(\.dynamicTypeSize) private var typeSize
-    @Environment(\.openURL) private var openURL
-    @State private var networks: WiFiNetworks?
-    /// The network picked from the list; nil while the name is typed in.
-    @State private var picked: String?
-    @State private var typed = ""
+    @State private var network = ""
     @State private var password = ""
     @FocusState private var field: Field?
 
     private enum Field { case name, password }
 
-    private var network: String { picked ?? typed }
-
     var body: some View {
         let problem = Codec.wifiProblem(network: network, password: password)
         Form {
             Section {
-                if let current = networks?.current {
-                    NetworkRow(name: current, detail: "This iPhone's network", isPicked: picked == current) {
-                        picked = current
-                        field = .password
-                    }
-                }
-                NetworkRow(name: "Other Network…", isPicked: picked == nil) {
-                    picked = nil
-                    field = .name
-                }
-                if picked == nil {
-                    LabeledContent("Name") {
-                        // The example would clip at the largest text sizes, where the field is narrow.
-                        TextField("Name", text: $typed, prompt: typeSize.isAccessibilitySize ? nil : Text("Network name"))
-                            .focused($field, equals: .name)
-                            .multilineTextAlignment(.trailing)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .submitLabel(.next)
-                            .onSubmit { field = .password }
-                    }
-                }
-                if networks?.access == .denied || networks?.access == .approximate {
-                    Button("Open Settings") {
-                        if let settings = URL(string: UIApplication.openSettingsURLString) { openURL(settings) }
-                    }
+                LabeledContent("Name") {
+                    // The example would clip at the largest text sizes, where the field is narrow.
+                    TextField("Name", text: $network, prompt: typeSize.isAccessibilitySize ? nil : Text("Network name"))
+                        .focused($field, equals: .name)
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.next)
+                        .onSubmit { field = .password }
                 }
             } header: {
                 Text("Network")
             } footer: {
-                Text(networkHelp)
+                Text("BedJet 3 can only join 2.4 GHz networks, not 5 GHz ones, whose names often end in “5G”.")
             }
 
             Section {
@@ -296,7 +273,7 @@ struct WiFiSetup: View {
                         .submitLabel(.done)
                 }
             } footer: {
-                Text("BedJet 3 can only join 2.4 GHz networks, not 5 GHz ones, whose names often end in “5G”. Lull hands the name and password to your BedJet, and remembers the name but never the password.")
+                Text("Lull hands the name and password to your BedJet, and remembers the name but never the password.")
             }
 
             Section {
@@ -318,63 +295,8 @@ struct WiFiSetup: View {
         .navigationTitle("Wi-Fi")
         .navigationBarTitleDisplayMode(.inline)
         .task {
-            if typed.isEmpty { typed = bedJet.wifiNetwork ?? "" }
-            let networks = WiFiNetworks(isDemo: bedJet.isDemo)
-            self.networks = networks
-            networks.look()
+            if network.isEmpty { network = bedJet.wifiNetwork ?? "" }
         }
-        .onChange(of: networks?.current) { _, current in
-            // A network the iPhone has left stays the one joined, typed in where it can be seen.
-            if let gone = picked, gone != current {
-                typed = gone
-                picked = nil
-            }
-            // Offer this iPhone's network, unless another name is already there.
-            guard let current, picked == nil, typed.isEmpty || typed == current else { return }
-            picked = current
-            typed = ""
-        }
-    }
-
-    private var networkHelp: String {
-        switch networks?.access {
-        case .allowed?:
-            return "An iPhone can only see the network it's on. For another one, or a hidden one, choose Other Network."
-        case .approximate?:
-            return "To show the network this iPhone is on, turn on Precise Location for Lull in Settings. Or choose Other Network."
-        case .denied?:
-            return "To show the network this iPhone is on, allow location access for Lull in Settings. Lull uses it only here. Or choose Other Network."
-        default:
-            return "Lull asks for location access only to see the network this iPhone is on. Or choose Other Network."
-        }
-    }
-}
-
-/// A Wi-Fi network to pick, ticked when it's the one picked.
-private struct NetworkRow: View {
-    let name: String
-    var detail: String?
-    let isPicked: Bool
-    let pick: () -> Void
-
-    var body: some View {
-        Button(action: pick) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(name).foregroundStyle(.white)
-                    if let detail {
-                        Text(detail)
-                            .font(.footnote)
-                            .foregroundStyle(Theme.secondary)
-                    }
-                }
-                Spacer()
-                if isPicked { Image(systemName: "checkmark").font(.body.weight(.semibold)) }
-            }
-            .contentShape(Rectangle())
-        }
-        .accessibilityLabel(detail.map { "\(name), \($0)" } ?? name)
-        .accessibilityAddTraits(isPicked ? .isSelected : [])
     }
 }
 

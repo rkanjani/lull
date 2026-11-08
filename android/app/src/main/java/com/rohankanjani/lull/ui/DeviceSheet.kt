@@ -1,11 +1,5 @@
 package com.rohankanjani.lull.ui
 
-import android.Manifest
-import android.content.Intent
-import android.net.Uri
-import android.provider.Settings
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -65,7 +59,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -79,7 +72,6 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -97,11 +89,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.rohankanjani.lull.AppModel
 import com.rohankanjani.lull.BedJet
 import com.rohankanjani.lull.WiFiActivity
-import com.rohankanjani.lull.WiFiNetworks
 import com.rohankanjani.lull.bedjetkit.Codec
 import com.rohankanjani.lull.bedjetkit.Generation
 import com.rohankanjani.lull.bedjetkit.LinkState
@@ -381,91 +371,20 @@ private fun WiFiOutcomeRow(outcome: String, failed: Boolean, divider: Boolean = 
 }
 
 /**
- * Gives a BedJet 3 the Wi-Fi network it fetches firmware over: one from the networks nearby, or any name, such as a
- * hidden network's. Lull remembers the name it gave, never the password.
+ * Gives a BedJet 3 the Wi-Fi network it fetches firmware over, by name. Seeing the networks around would need
+ * location access, which Lull never asks for. Lull remembers the name it gave, never the password.
  */
 @Composable
 private fun WiFiSetup(model: AppModel, bedJet: BedJet) {
-    val context = LocalContext.current
-    val networks = remember { WiFiNetworks(context) }
-    var allowed by remember { mutableStateOf(bedJet.isDemo || networks.allowed) }
-    var approximate by remember { mutableStateOf(!bedJet.isDemo && networks.approximate) }
-    var asked by rememberSaveable { mutableStateOf(false) }
-    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
-        allowed = granted[Manifest.permission.ACCESS_FINE_LOCATION] == true
-        approximate = networks.approximate
-    }
-    LaunchedEffect(Unit) {
-        // Approximate location was already an answer to Lull's question, so it's sent to Settings, as on iOS.
-        if (!allowed && !approximate && !asked) {
-            asked = true
-            ask.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
-        }
-    }
-    // Coming back from Settings may have allowed it.
-    LifecycleResumeEffect(Unit) {
-        allowed = bedJet.isDemo || networks.allowed
-        approximate = !bedJet.isDemo && networks.approximate
-        onPauseOrDispose {}
-    }
-    DisposableEffect(allowed) {
-        val stop = if (allowed && !bedJet.isDemo) networks.start() else ({})
-        onDispose { stop() }
-    }
-    val choices = if (bedJet.isDemo) WiFiNetworks.demo else networks.choices
-
-    // The network picked from the list; null while the name is typed in.
-    var picked by rememberSaveable { mutableStateOf<String?>(null) }
-    var typed by rememberSaveable { mutableStateOf(bedJet.wifiNetwork.orEmpty()) }
+    var network by rememberSaveable { mutableStateOf(bedJet.wifiNetwork.orEmpty()) }
     // Not saved with the screen's state, which can be written to disk.
     var password by remember { mutableStateOf("") }
-    val current = choices.firstOrNull { it.current }?.name
-    LaunchedEffect(current) {
-        // Offer this phone's network, unless another name is already there.
-        if (current != null && picked == null && (typed.isEmpty() || typed == current)) {
-            picked = current
-            typed = ""
-        }
-    }
-    LaunchedEffect(choices) {
-        // A network a later scan no longer hears stays the one joined, typed in where it can be seen.
-        val gone = picked?.takeIf { name -> choices.none { it.name == name } } ?: return@LaunchedEffect
-        typed = gone
-        picked = null
-    }
-    val network = picked ?: typed
     val problem = Codec.wifiProblem(network, password)
     val activity = bedJet.wifiActivity?.takeIf { it.purpose == WiFiActivity.Purpose.JOINING }
-    val showsSettings = !allowed && (asked || approximate)
 
-    Section(
-        header = "Network",
-        footer = if (allowed) {
-            "BedJet 3 can only join 2.4 GHz networks, so only those are listed. For a hidden network, choose Other Network."
-        } else if (approximate) {
-            "To list the networks nearby, turn on Precise Location for Lull in Settings. Or choose " +
-                "Other Network: BedJet 3 can only join 2.4 GHz networks, not 5 GHz ones, whose names often end in “5G”."
-        } else {
-            "To list the networks nearby, allow location access for Lull in Settings. Lull uses it only here. Or choose " +
-                "Other Network: BedJet 3 can only join 2.4 GHz networks, not 5 GHz ones, whose names often end in “5G”."
-        },
-    ) {
-        choices.forEach { choice ->
-            NetworkRow(choice.name, detail = if (choice.current) "This phone's network" else null, picked = picked == choice.name) {
-                picked = choice.name
-            }
-        }
-        NetworkRow("Other Network…", picked = picked == null, divider = picked == null || showsSettings) { picked = null }
-        if (picked == null) {
-            TextRow("Name", typed, example = "Network name", imeAction = ImeAction.Next, divider = showsSettings) { typed = it }
-        }
-        if (showsSettings) {
-            ButtonRow("Open Settings", enabled = true, divider = false) {
-                context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null)))
-            }
-        }
+    Section(header = "Network", footer = "BedJet 3 can only join 2.4 GHz networks, not 5 GHz ones, whose names often end in “5G”.") {
+        TextRow("Name", network, example = "Network name", imeAction = ImeAction.Next, divider = false) { network = it }
     }
-    // The list above says which networks a BedJet 3 can join, so this only says what happens to the details.
     Section(footer = "Lull hands the name and password to your BedJet, and remembers the name but never the password.") {
         // Shown as typed, to check a long Wi-Fi password, and so the phone doesn't offer to save it for Lull.
         TextRow("Password", password, keyboard = KeyboardType.Password, imeAction = ImeAction.Done, divider = false) { password = it }
@@ -479,32 +398,6 @@ private fun WiFiSetup(model: AppModel, bedJet: BedJet) {
         }
         if (activity?.outcome != null) WiFiOutcomeRow(activity.outcome, activity.failed, divider = false)
     }
-}
-
-/** A Wi-Fi network to pick, ticked when it's the one picked. */
-@Composable
-private fun NetworkRow(name: String, detail: String? = null, picked: Boolean, divider: Boolean = true, pick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .selectable(selected = picked, role = Role.RadioButton, onClick = pick)
-            .clearAndSetSemantics {
-                contentDescription = if (detail != null) "$name, $detail" else name
-                selected = picked
-                role = Role.RadioButton
-                onClick { pick(); true }
-            }
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(name, fontSize = 17.sp)
-            if (detail != null) Text(detail, fontSize = 13.sp, color = Theme.secondary)
-        }
-        if (picked) Icon(Icons.Filled.Check, null, tint = Theme.green, modifier = Modifier.size(22.dp))
-    }
-    if (divider) HorizontalDivider(color = Theme.hairline)
 }
 
 /** A label with a field to type into, like a row in Settings. */

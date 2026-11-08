@@ -120,8 +120,9 @@ the app doesn't show. Lull shows the BedJet's.
 
 A BedJet 3 can't be asked which Wi-Fi networks it can see. Asked for every value from `0x00` to `0x7f` (`41 <id> <tag>`,
 read back from `0x2006`), it answers only `0x00` (name), `0x01`–`0x06` (memory and program names), `0x07`–`0x13`
-(program steps) and `0x20` (versions), and nothing else. So Lull's Wi-Fi screen lists the networks the phone can
-see: those nearby on Android, and on an iPhone, which can't list networks, only the one it's on.
+(program steps) and `0x20` (versions), and nothing else. So the person types the network's name. The phone's own
+list of networks isn't offered either: both Android and iOS give it only to apps with location access, which Lull
+never asks for, and writing `0x2002` and `0x2003` needs none.
 
 ## Status byte 27 (observed in code, captured)
 

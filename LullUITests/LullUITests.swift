@@ -322,11 +322,11 @@ final class LullUITests: XCTestCase {
         for _ in 0..<8 where !(wifi.exists && wifi.isHittable) { app.swipeUp() }
         wifi.tap()
 
-        // A demo BedJet's phone is on a pretend network, offered first, and the simulated BedJet joins any network,
-        // testing it one step a second.
-        let home = app.buttons["Home, This iPhone's network"]
-        XCTAssertTrue(home.waitForExistence(timeout: 5))
-        XCTAssertTrue(home.isSelected)
+        // The network's name is typed, and the simulated BedJet joins any network, testing it one step a second.
+        let name = app.textFields["Name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.tap()
+        name.typeText("Home")
         let password = app.textFields["Password"]
         password.tap()
         password.typeText("12345678\n")
