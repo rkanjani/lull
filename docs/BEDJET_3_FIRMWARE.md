@@ -107,8 +107,18 @@ Lull reports the failure still showing, or that the BedJet didn't respond.
 
 Byte 29 code 2 means "A newer version of firmware is available", and code 3 means "Unable to connect to the firmware
 update server". The app shows these, then acknowledges with button `0x52`, as it does for every notification. For
-code 2, Lull says newer firmware is available in the BedJet sheet and acknowledges it the same way. It leaves code 3
+code 2, Lull offers the update once, when restarting the BedJet would interrupt nothing (the air off, no schedule
+running), and otherwise says newer firmware is available in the BedJet sheet. It never acknowledges code 2, so other
+phones and the official app still see it; the BedJet stops raising it once it's updated (inferred). It leaves code 3
 alone, as it does codes it doesn't show.
+
+## While the BedJet is busy (inferred)
+
+From the moment it reports a step below 20 until it reports a result, and while it reports 28 (restarting to install)
+until the link drops, Lull sends nothing else: no command, schedule, clock, check or network. The restart that comes
+would cut a command or a schedule being saved short, and end a night started meanwhile. A step that hasn't changed in
+ten minutes, the longest a check is waited for, is taken to be stuck rather than under way. Lull also only checks for
+an update with the air off and no schedule running, since the restart turns the air off.
 
 ## Versions (observed in code)
 

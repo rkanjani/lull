@@ -201,7 +201,8 @@ private fun DeviceSettings(model: AppModel, bedJet: BedJet, showNearby: () -> Un
         bedJet.firmware?.let { Labeled("Firmware", it) }
     }
 
-    if (bedJet.isSlowToFind) {
+    // Not while it restarts for firmware, when unplugging it could interrupt the install.
+    if (bedJet.isSlowToFind && !bedJet.expectsRestart) {
         Section(
             header = "Can't find $title?",
             footer = "Lull keeps looking for this BedJet while it's open, and never connects to a different one by itself.",
@@ -218,8 +219,9 @@ private fun DeviceSettings(model: AppModel, bedJet: BedJet, showNearby: () -> Un
     // Kept, but off, while the BedJet restarts to check for firmware, so the sheet doesn't jump about.
     if ((bedJet.isConnected || bedJet.isRestarting) && extra != null) {
         Section(header = "BedJet") {
-            Toggle("Light ring", extra.ledEnabled, enabled = bedJet.isConnected) { on -> model.scope.launch { bedJet.setLED(on) } }
-            Toggle("Mute beeps", extra.beepsMuted, enabled = bedJet.isConnected) { muted -> model.scope.launch { bedJet.setMuted(muted) } }
+            val enabled = bedJet.isConnected && !bedJet.isUsingWiFi
+            Toggle("Light ring", extra.ledEnabled, enabled = enabled) { on -> model.scope.launch { bedJet.setLED(on) } }
+            Toggle("Mute beeps", extra.beepsMuted, enabled = enabled) { muted -> model.scope.launch { bedJet.setMuted(muted) } }
         }
     }
 
@@ -294,31 +296,31 @@ private fun NicknameField(bedJet: BedJet) {
 @Composable
 private fun FirmwareSection(model: AppModel, bedJet: BedJet) {
     var confirming by rememberSaveable { mutableStateOf(false) }
-    val footer = if (bedJet.updateWaitsForSchedule) {
-        "A schedule is running. Check once it has finished, since updating restarts your BedJet."
-    } else if (!bedJet.isConnected && !bedJet.isRestarting) {
+    val footer = if (!bedJet.isConnected && !bedJet.isRestarting) {
         "Lull checks for updates while it's connected to your BedJet."
+    } else if (bedJet.isConnected && !bedJet.isIdle && !bedJet.isUsingWiFi) {
+        FirmwareCopy.WAITS_FOR_IDLE
     } else {
-        "Your BedJet checks for updates itself, over Wi-Fi, and restarts to do it, which turns off the air for a few seconds. If there's a newer version, it installs it straight away."
+        "Your BedJet checks for updates itself, over Wi-Fi, and restarts to do it. If there's a newer version, it installs it straight away."
     }
     Section(header = "Firmware", footer = footer) {
         if (bedJet.updateAvailable) Tip(Icons.Filled.ArrowCircleDown, "Your BedJet says newer firmware is available.")
         val activity = bedJet.wifiActivity?.takeIf { it.purpose == WiFiActivity.Purpose.UPDATING }
-        WiFiButton("Check for Update", activity, enabled = bedJet.canUpdateFirmware, divider = activity?.outcome != null) { confirming = true }
+        WiFiButton(
+            FirmwareCopy.button(bedJet.updateAvailable), activity, enabled = bedJet.canUpdateFirmware, divider = activity?.outcome != null,
+        ) { confirming = true }
         if (activity?.outcome != null) WiFiOutcomeRow(activity.outcome, activity.failed, divider = false)
     }
     if (confirming) {
         AlertDialog(
             onDismissRequest = { confirming = false },
-            title = { Text("Check for a firmware update?") },
-            text = {
-                Text("Your BedJet restarts to check, which turns off the air for a few seconds. If there's a newer version, it installs it straight away. Keep it plugged in until it's back.")
-            },
+            title = { Text(FirmwareCopy.confirmTitle(bedJet.updateAvailable)) },
+            text = { Text(FirmwareCopy.CONFIRM_MESSAGE) },
             confirmButton = {
                 TextButton({
                     confirming = false
                     model.scope.launch { bedJet.updateFirmware() }
-                }) { Text("Check") }
+                }) { Text(if (bedJet.updateAvailable) "Update" else "Check") }
             },
             dismissButton = { TextButton({ confirming = false }) { Text("Cancel") } },
             containerColor = Theme.raised,

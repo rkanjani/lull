@@ -44,6 +44,8 @@ data class LaunchOptions(
     val demoStartsUnchosen: Boolean = false,
     /** Makes the first simulated BedJet never answer, as if it were unplugged. */
     val demoFirstUnitAway: Boolean = false,
+    /** Makes the simulated BedJets say newer firmware is available. */
+    val demoFirmwareUpdate: Boolean = false,
 )
 
 /** Where Lull keeps what it saves. UI tests (`ephemeral`) and model tests keep nothing in the app's own place. */
@@ -252,7 +254,10 @@ class AppModel(
             slots = listOf(StoredProgram("Summer nights", Schedule.templates[2].program.steps), null, null),
             scope = scope,
             wifiNetwork = bedJet.wifiNetwork,
-        ).apply { answers = !(options.demoFirstUnitAway && bedJet.unit == DemoDiscovery.SIMULATED[0].id) }
+        ).apply {
+            answers = !(options.demoFirstUnitAway && bedJet.unit == DemoDiscovery.SIMULATED[0].id)
+            if (options.demoFirmwareUpdate) offerFirmwareUpdate()
+        }
     }
 
     private fun show(fleet: Fleet) {

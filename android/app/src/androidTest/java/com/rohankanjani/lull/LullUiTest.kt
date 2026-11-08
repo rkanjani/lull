@@ -7,6 +7,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
@@ -176,9 +177,11 @@ class LullUiTest {
     /** A row in a list of BedJets, by its name and any code after it. */
     private fun row(title: String) = labelStartsWith("$title,")
 
-    private fun relaunch(demoChoose: Boolean = false, demoFirstUnitAway: Boolean = false) {
+    private fun relaunch(demoChoose: Boolean = false, demoFirstUnitAway: Boolean = false, demoFirmwareUpdate: Boolean = false) {
         scenario.close()
-        scenario = launchLull(ephemeral = true, demoChoose = demoChoose, demoFirstUnitAway = demoFirstUnitAway)
+        scenario = launchLull(
+            ephemeral = true, demoChoose = demoChoose, demoFirstUnitAway = demoFirstUnitAway, demoFirmwareUpdate = demoFirmwareUpdate,
+        )
     }
 
     /** Opens the BedJet sheet's list of BedJets nearby and picks the second simulated one, which shares a name. */
@@ -288,6 +291,38 @@ class LullUiTest {
     }
 
     @Test
+    fun firmwareUpdateIsOfferedAndInstalled() {
+        relaunch(demoFirmwareUpdate = true)
+        // The simulated BedJet offers newer firmware as soon as it connects with the air off.
+        compose.waitFor(hasText("Firmware update available"), timeoutMillis = 10_000)
+        compose.capture("firmware-update")
+        compose.onNodeWithText("Update Now").performClick()
+        // It restarts to check, downloads the update, restarts again into it, and Lull says so once it's back.
+        compose.waitFor(hasText("BedJet updated"), timeoutMillis = 30_000)
+        compose.onNodeWithText("BEDJET-DEMO is now on firmware V1.21 (demo).").assertExists()
+        compose.onNodeWithText("OK").performClick()
+        compose.waitFor(pill("BEDJET-DEMO"))
+        compose.onNodeWithText("BedJet updated").assertDoesNotExist()
+    }
+
+    @Test
+    fun aFirmwareUpdatePutOffWaitsInTheBedJetSheet() {
+        relaunch(demoFirmwareUpdate = true)
+        compose.waitFor(hasText("Firmware update available"), timeoutMillis = 10_000)
+        compose.onNodeWithText("Not Now").performClick()
+        compose.onNode(pill("BEDJET-DEMO")).performClick()
+        compose.waitFor(hasText("Done"))
+        compose.onNodeWithText("Update Firmware").performScrollTo().assertIsEnabled()
+        compose.capture("firmware-update-sheet")
+        compose.onNodeWithText("Update Firmware").performClick()
+        compose.waitFor(hasText("Update your BedJet's firmware?"))
+        compose.onNodeWithText("Update").performClick()
+        // Asked for from the sheet, how it went is said there, and the offer isn't made again.
+        compose.waitFor(hasText("Your BedJet updated its firmware to V1.21 (demo)."), timeoutMillis = 30_000)
+        compose.onNodeWithText("BedJet updated").assertDoesNotExist()
+    }
+
+    @Test
     fun remoteAndDevice() {
         compose.waitFor(hasText("Heat"), timeoutMillis = 10_000)
         Thread.sleep(2000)
@@ -361,6 +396,7 @@ fun launchLull(
     demoHistory: Boolean = false,
     demoChoose: Boolean = false,
     demoFirstUnitAway: Boolean = false,
+    demoFirmwareUpdate: Boolean = false,
 ): ActivityScenario<MainActivity> {
     val intent = Intent(ApplicationProvider.getApplicationContext(), MainActivity::class.java)
         .putExtra("ephemeral", ephemeral)
@@ -369,6 +405,7 @@ fun launchLull(
         .putExtra("demoLabelConnected", demoLabelConnected)
         .putExtra("demoChoose", demoChoose)
         .putExtra("demoFirstUnitAway", demoFirstUnitAway)
+        .putExtra("demoFirmwareUpdate", demoFirmwareUpdate)
     return ActivityScenario.launch(intent)
 }
 

@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
                     demoHistory = intent.getBooleanExtra("demoHistory", false),
                     demoStartsUnchosen = intent.getBooleanExtra("demoChoose", false),
                     demoFirstUnitAway = intent.getBooleanExtra("demoFirstUnitAway", false),
+                    demoFirmwareUpdate = intent.getBooleanExtra("demoFirmwareUpdate", false),
                 )
                 return AppModel(application, options) as T
             }

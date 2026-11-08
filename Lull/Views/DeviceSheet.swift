@@ -32,7 +32,8 @@ struct DeviceSheet: View {
                     Text(help)
                 }
 
-                if bedJet.isSlowToFind {
+                // Not while it restarts for firmware, when unplugging it could interrupt the install.
+                if bedJet.isSlowToFind, !bedJet.expectsRestart {
                     Section {
                         Label("Lull works with BedJet 3 and BedJet V2. The original BedJet isn't supported.", systemImage: "bed.double")
                         Label("Force-quit the BedJet app: swipe up from the bottom of the screen, then swipe the app away.", systemImage: "xmark.app")
@@ -53,7 +54,7 @@ struct DeviceSheet: View {
                         Toggle("Light ring", isOn: .init(get: { extra.ledEnabled }, set: { on in Task { await bedJet.setLED(on) } }))
                         Toggle("Mute beeps", isOn: .init(get: { extra.beepsMuted }, set: { muted in Task { await bedJet.setMuted(muted) } }))
                     }
-                    .disabled(!bedJet.isConnected)
+                    .disabled(!bedJet.isConnected || bedJet.isUsingWiFi)
                 }
 
                 if !bedJet.deviceSlots.isEmpty {
@@ -151,25 +152,25 @@ private struct FirmwareSection: View {
                 Label("Your BedJet says newer firmware is available.", systemImage: "arrow.down.circle")
             }
             let activity = bedJet.wifiActivity?.purpose == .updating ? bedJet.wifiActivity : nil
-            WiFiButton(title: "Check for Update", activity: activity) { confirming = true }
+            WiFiButton(title: FirmwareCopy.button(available: bedJet.updateAvailable), activity: activity) { confirming = true }
                 .disabled(!bedJet.canUpdateFirmware)
             if let activity, let outcome = activity.outcome { WiFiOutcomeRow(outcome: outcome, failed: activity.failed) }
         } header: {
             Text("Firmware")
         } footer: {
-            if bedJet.updateWaitsForSchedule {
-                Text("A schedule is running. Check once it has finished, since updating restarts your BedJet.")
-            } else if !bedJet.isConnected, !bedJet.isRestarting {
+            if !bedJet.isConnected, !bedJet.isRestarting {
                 Text("Lull checks for updates while it's connected to your BedJet.")
+            } else if bedJet.isConnected, !bedJet.isIdle, !bedJet.isUsingWiFi {
+                Text(FirmwareCopy.waitsForIdle)
             } else {
-                Text("Your BedJet checks for updates itself, over Wi-Fi, and restarts to do it, which turns off the air for a few seconds. If there's a newer version, it installs it straight away.")
+                Text("Your BedJet checks for updates itself, over Wi-Fi, and restarts to do it. If there's a newer version, it installs it straight away.")
             }
         }
-        .alert("Check for a firmware update?", isPresented: $confirming) {
+        .alert(FirmwareCopy.confirmTitle(available: bedJet.updateAvailable), isPresented: $confirming) {
             Button("Cancel", role: .cancel) {}
-            Button("Check") { Task { await bedJet.updateFirmware() } }
+            Button(bedJet.updateAvailable ? "Update" : "Check") { Task { await bedJet.updateFirmware() } }
         } message: {
-            Text("Your BedJet restarts to check, which turns off the air for a few seconds. If there's a newer version, it installs it straight away. Keep it plugged in until it's back.")
+            Text(FirmwareCopy.confirmMessage)
         }
     }
 }
