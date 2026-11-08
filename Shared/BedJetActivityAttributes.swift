@@ -59,6 +59,58 @@ struct BedJetActivityAttributes: ActivityAttributes {
         func differsEnough(from shown: Side) -> Bool {
             status.differsEnough(from: shown.status) || name != shown.name || generation != shown.generation
         }
+
+        init(id: UUID, status: LiveStatus, name: String, generation: Generation) {
+            self.id = id
+            self.status = status
+            self.name = name
+            self.generation = generation
+        }
+
+        // MARK: As ActivityKit carries it
+
+        /// The status as the Live Activity carries it, a night as only what's drawn (see `LiveStatus.SentNight`) to fit
+        /// in ActivityKit's 4 KB. Only here: everywhere else a `LiveStatus` is saved whole.
+        private enum SentStatus: Codable {
+            case night(LiveStatus.SentNight)
+            case air(mode: Mode, temperature: Int?, fanPercent: Int, endsAt: Date)
+
+            init(_ status: LiveStatus) {
+                switch status {
+                case let .night(run): self = .night(.init(run))
+                case let .air(mode, temperature, fanPercent, endsAt):
+                    self = .air(mode: mode, temperature: temperature, fanPercent: fanPercent, endsAt: endsAt)
+                }
+            }
+
+            var status: LiveStatus {
+                switch self {
+                case let .night(night): .night(night.run)
+                case let .air(mode, temperature, fanPercent, endsAt):
+                    .air(mode: mode, temperature: temperature, fanPercent: fanPercent, endsAt: endsAt)
+                }
+            }
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, status, name, generation
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            id = try values.decode(UUID.self, forKey: .id)
+            status = try values.decode(SentStatus.self, forKey: .status).status
+            name = try values.decode(String.self, forKey: .name)
+            generation = try values.decode(Generation.self, forKey: .generation)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encode(id, forKey: .id)
+            try values.encode(SentStatus(status), forKey: .status)
+            try values.encode(name, forKey: .name)
+            try values.encode(generation, forKey: .generation)
+        }
     }
 
     /// The most BedJets one Live Activity shows. The Dynamic Island has room for one on each side of the camera.

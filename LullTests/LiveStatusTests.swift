@@ -127,13 +127,23 @@ final class LiveStatusTests: XCTestCase {
             XCTAssertEqual(read.sides[0].status.staleDate(at: now), status.staleDate(at: now))
         }
         let night = run(startedMinutesAgo: 60)
-        let read = try JSONDecoder().decode(LiveStatus.self, from: encoder.encode(LiveStatus.night(night)))
+        let sent = BedJetActivityAttributes.ContentState(sides: [side(.night(night))], useFahrenheit: true)
+        let read = try JSONDecoder().decode(BedJetActivityAttributes.ContentState.self, from: encoder.encode(sent)).sides[0].status
         guard case let .night(readNight) = read else { return XCTFail("not a night") }
+        XCTAssertNotEqual(readNight.schedule.phases.map(\.id), night.schedule.phases.map(\.id))
         XCTAssertEqual(readNight.schedule.name, night.schedule.name)
         XCTAssertEqual(readNight.startedAt, night.startedAt)
         XCTAssertEqual(readNight.phase(at: now)?.phase.setting(on: .v3, fahrenheit: true),
                        night.phase(at: now)?.phase.setting(on: .v3, fahrenheit: true))
         XCTAssertEqual(readNight.schedule.phases.map(\.level), night.schedule.phases.map(\.level))
+    }
+
+    func testALiveStatusIsSavedWhole() throws {
+        // Only the Live Activity carries a night without its schedule's IDs; saved anywhere else, as with the widgets'
+        // snapshot, a status comes back as it was.
+        for status in [LiveStatus.air(mode: .heat, temperature: nil, fanPercent: 40, endsAt: now), .night(run(startedMinutesAgo: 60))] {
+            XCTAssertEqual(try JSONDecoder().decode(LiveStatus.self, from: JSONEncoder().encode(status)), status)
+        }
     }
 
     /// ActivityKit turns down content over 4 KB, leaving no Live Activity, or the old one, with nothing to say so.
