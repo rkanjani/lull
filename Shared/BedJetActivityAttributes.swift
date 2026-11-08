@@ -17,14 +17,33 @@ struct BedJetActivityAttributes: ActivityAttributes {
                 || zip(sides, shown.sides).contains { $0.differsEnough(from: $1) }
         }
 
-        /// When what's shown may stop being true unless Lull updates it: the soonest of its BedJets'.
+        /// When what's shown may stop being true unless Lull updates it: the soonest of its BedJets', but for a BedJet
+        /// that ends before another. There is only one stale date for the whole, and reaching it hides every night's
+        /// phase, so one side's air running out would hide the other side's phase for the rest of the night. A BedJet's
+        /// end only takes its countdown to 0:00, which it does by itself, and Lull takes it out when it next hears.
         func staleDate(at now: Date) -> Date? {
-            sides.map { $0.status.staleDate(at: now) }.min()
+            let lastEnd = sides.map(\.status.endsAt).max()
+            return sides.compactMap { side in
+                let date = side.status.staleDate(at: now)
+                return date < side.status.endsAt || side.status.endsAt == lastEnd ? date : nil
+            }.min()
         }
 
-        /// What a phase is set to, such as "75° · Fan 40%".
-        func detail(of phase: Phase, on side: Side) -> String {
-            phase.setting(on: side.generation, fahrenheit: useFahrenheit)
+        /// The most ActivityKit takes: content any larger fails to start or update the Live Activity, with nothing to
+        /// show for it.
+        static let maxBytes = 4096
+
+        var size: Int { (try? JSONEncoder().encode(self).count) ?? .max }
+
+        /// This, made to fit ActivityKit. Two of the longest nights fit with room to spare, so this is only a safeguard:
+        /// the last BedJet is left out until it fits, rather than the Live Activity silently not changing.
+        func fitted(within maxBytes: Int = maxBytes) -> ContentState? {
+            var fitted = self
+            while fitted.size > maxBytes {
+                guard fitted.sides.count > 1 else { return nil }
+                fitted.sides.removeLast()
+            }
+            return fitted
         }
     }
 

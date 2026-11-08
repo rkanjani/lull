@@ -114,11 +114,60 @@ final class LiveStatusTests: XCTestCase {
 
     func testALiveActivitySurvivesBeingSaved() throws {
         // ActivityKit hands the content to the widget extension as Codable data.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
         for status in [LiveStatus.air(mode: .heat, temperature: 66, fanPercent: 40, endsAt: now), .night(run(startedMinutesAgo: 60))] {
             let state = BedJetActivityAttributes.ContentState(sides: [side(status, generation: .v2)], useFahrenheit: true)
-            let saved = try JSONEncoder().encode(state)
-            XCTAssertEqual(try JSONDecoder().decode(BedJetActivityAttributes.ContentState.self, from: saved), state)
+            let saved = try encoder.encode(state)
+            let read = try JSONDecoder().decode(BedJetActivityAttributes.ContentState.self, from: saved)
+            // A night comes back without its schedule's IDs, which nothing draws, and isn't taken for a change.
+            XCTAssertEqual(try encoder.encode(read), saved)
+            XCTAssertFalse(read.differsEnough(from: state))
+            XCTAssertEqual(read.sides[0].status.endsAt, status.endsAt)
+            XCTAssertEqual(read.sides[0].status.staleDate(at: now), status.staleDate(at: now))
         }
+        let night = run(startedMinutesAgo: 60)
+        let read = try JSONDecoder().decode(LiveStatus.self, from: encoder.encode(LiveStatus.night(night)))
+        guard case let .night(readNight) = read else { return XCTFail("not a night") }
+        XCTAssertEqual(readNight.schedule.name, night.schedule.name)
+        XCTAssertEqual(readNight.startedAt, night.startedAt)
+        XCTAssertEqual(readNight.phase(at: now)?.phase.setting(on: .v3, fahrenheit: true),
+                       night.phase(at: now)?.phase.setting(on: .v3, fahrenheit: true))
+        XCTAssertEqual(readNight.schedule.phases.map(\.level), night.schedule.phases.map(\.level))
+    }
+
+    /// ActivityKit turns down content over 4 KB, leaving no Live Activity, or the old one, with nothing to say so.
+    /// Android has no twin: its Live Update is drawn on the phone, with no such limit.
+    @MainActor
+    func testTwoOfTheLongestNightsFitInALiveActivity() throws {
+        // The most phases a schedule can have, each as long and as long to write as it gets, under the longest names: a
+        // schedule's is cut to 15 characters and a nickname to 30, each here 4 bytes, then a code after a shared name.
+        let phase = Phase(.extendedHeat, temperature: 67, fan: 100, minutes: Limits.maxStepMinutes)
+        let longest = Schedule(name: String(repeating: "😴", count: Limits.nameLength),
+                               phases: Array(repeating: phase, count: Limits.stepsPerProgram))
+        let night = ActiveRun(schedule: longest, startedAt: now.addingTimeInterval(-0.123_456_789))
+        let name = String(repeating: "🛏", count: 30) + " · ABCD"
+        let both = BedJetActivityAttributes.ContentState(
+            sides: [side(.night(night), name: name), side(.night(night), id: theirs, name: name)], useFahrenheit: true
+        )
+        XCTAssertLessThan(both.size, BedJetActivityAttributes.ContentState.maxBytes * 3 / 4)
+        XCTAssertEqual(both.fitted(), both)
+        // Nothing left out of what Lull would send.
+        let sent = LiveActivities.state(for: [(mine, .show(both.sides[0])), (theirs, .show(both.sides[1]))],
+                                        useFahrenheit: true, shown: nil, at: now)
+        XCTAssertEqual(sent?.sides.map(\.id), [mine, theirs])
+    }
+
+    /// Android has no twin: its Live Update is drawn on the phone, with no such limit.
+    func testWhatDoesntFitInALiveActivityIsLeftOutRatherThanNotShown() {
+        let both = BedJetActivityAttributes.ContentState(
+            sides: [side(.night(run(startedMinutesAgo: 60))), side(.night(run(startedMinutesAgo: 60)), id: theirs)],
+            useFahrenheit: true
+        )
+        let one = BedJetActivityAttributes.ContentState(sides: [both.sides[0]], useFahrenheit: true)
+        XCTAssertEqual(both.fitted(within: both.size), both)
+        XCTAssertEqual(both.fitted(within: both.size - 1), one)
+        XCTAssertNil(both.fitted(within: one.size - 1))
     }
 
     // MARK: The Live Activity. The twins of LiveStatusTest's Live Update tests.
@@ -178,8 +227,28 @@ final class LiveStatusTests: XCTestCase {
         // One side stops, and the other carries on alone.
         let left = LiveActivities.state(for: [(theirs, .show(air))], useFahrenheit: true, shown: both, at: now)
         XCTAssertEqual(left?.sides.map(\.id), [theirs])
-        // When it ends soonest, so does what the whole may be trusted for.
-        XCTAssertEqual(both.staleDate(at: now), min(night.staleDate(at: now)!, now.addingTimeInterval(600)))
+        // The air ending first doesn't hide the night's phase: it only takes its own countdown to 0:00. Android, which
+        // redraws rather than hiding, takes it out then instead.
+        XCTAssertEqual(both.staleDate(at: now), night.staleDate(at: now))
+        // The other way round, the night's end doesn't count until it's the last: its last phase stays, at 0:00.
+        let nightEnds = night.sides[0].status.endsAt
+        let inLastPhase = run(startedMinutesAgo: 60).phaseEnds[2].addingTimeInterval(60)
+        let later = side(.air(mode: .heat, temperature: 66, fanPercent: 40, endsAt: nightEnds.addingTimeInterval(3600)), id: theirs)
+        let pair = BedJetActivityAttributes.ContentState(sides: [night.sides[0], later], useFahrenheit: true)
+        XCTAssertEqual(pair.staleDate(at: now), night.staleDate(at: now))
+        XCTAssertEqual(pair.staleDate(at: inLastPhase), later.status.endsAt)
+        // Alone, it counts.
+        XCTAssertEqual(night.staleDate(at: inLastPhase), nightEnds)
+    }
+
+    /// Android has no twin: its notification is taken down at the end of the night or timer by the system.
+    @MainActor
+    func testALiveActivityIOSEndedIsTakenDownToo() {
+        // iOS ends a Live Activity after 8 hours, and can leave it on the Lock Screen for up to 4 more.
+        XCTAssertTrue(LiveActivities.isSeen(.active))
+        XCTAssertTrue(LiveActivities.isSeen(.stale))
+        XCTAssertTrue(LiveActivities.isSeen(.ended))
+        XCTAssertFalse(LiveActivities.isSeen(.dismissed))
     }
 
     @MainActor

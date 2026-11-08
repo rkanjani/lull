@@ -50,12 +50,100 @@ enum LiveStatus: Codable, Hashable {
     func differsEnough(from shown: LiveStatus) -> Bool {
         switch (self, shown) {
         case let (.night(run), .night(shownRun)):
-            return run != shownRun
+            // What's shown comes back without the schedule's IDs (see `SentNight`), so a night is told by what's drawn.
+            return SentNight(run) != SentNight(shownRun)
         case let (.air(mode, temperature, fan, endsAt), .air(shownMode, shownTemperature, shownFan, shownEndsAt)):
             return mode != shownMode || temperature != shownTemperature || fan != shownFan
                 || abs(endsAt.timeIntervalSince(shownEndsAt)) > 60
         default:
             return true
+        }
+    }
+}
+
+// MARK: As carried in the Live Activity
+
+extension LiveStatus {
+    /// A night as the Live Activity carries it: only what it draws. ActivityKit turns down content over 4 KB, and a whole
+    /// schedule, with an ID for each of up to 32 phases, would leave two long nights over it. Without them, two of the
+    /// longest nights fit with room to spare.
+    struct SentNight: Codable, Hashable {
+        var name: String
+        var phases: [SentPhase]
+        var startedAt: Date
+
+        init(_ run: ActiveRun) {
+            name = run.schedule.name
+            phases = run.schedule.phases.map(SentPhase.init)
+            startedAt = run.startedAt
+        }
+
+        var run: ActiveRun {
+            ActiveRun(schedule: Schedule(name: name, phases: phases.map(\.phase)), startedAt: startedAt)
+        }
+    }
+
+    /// A phase as `[mode, temperature, fan, minutes]`, the shortest it can be written.
+    struct SentPhase: Codable, Hashable {
+        var mode: Mode
+        var temperature: Int
+        var fanPercent: Int
+        var minutes: Int
+
+        init(_ phase: Phase) {
+            mode = phase.mode
+            temperature = phase.temperature
+            fanPercent = phase.fanPercent
+            minutes = phase.minutes
+        }
+
+        var phase: Phase { Phase(mode, temperature: temperature, fan: fanPercent, minutes: minutes) }
+
+        init(from decoder: Decoder) throws {
+            var values = try decoder.unkeyedContainer()
+            mode = try values.decode(Mode.self)
+            temperature = try values.decode(Int.self)
+            fanPercent = try values.decode(Int.self)
+            minutes = try values.decode(Int.self)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var values = encoder.unkeyedContainer()
+            try values.encode(mode)
+            try values.encode(temperature)
+            try values.encode(fanPercent)
+            try values.encode(minutes)
+        }
+    }
+
+    private struct SentAir: Codable {
+        var mode: Mode
+        var temperature: Int?
+        var fanPercent: Int
+        var endsAt: Date
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case night, air
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        if let night = try values.decodeIfPresent(SentNight.self, forKey: .night) {
+            self = .night(night.run)
+        } else {
+            let air = try values.decode(SentAir.self, forKey: .air)
+            self = .air(mode: air.mode, temperature: air.temperature, fanPercent: air.fanPercent, endsAt: air.endsAt)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .night(run):
+            try values.encode(SentNight(run), forKey: .night)
+        case let .air(mode, temperature, fanPercent, endsAt):
+            try values.encode(SentAir(mode: mode, temperature: temperature, fanPercent: fanPercent, endsAt: endsAt), forKey: .air)
         }
     }
 }
