@@ -32,7 +32,7 @@ sealed interface LiveStatus {
      * When what's shown may stop being true unless Lull updates it: for a night, the end of the phase it is in,
      * after which the phase is hidden and only the night's own progress, which is always right, stays.
      */
-    fun staleAt(now: Long): Long = when (this) {
+    fun staleDate(now: Long): Long = when (this) {
         is Night -> run.phaseEnds.firstOrNull { it > now } ?: run.endsAt
         is Air -> endsAt
     }

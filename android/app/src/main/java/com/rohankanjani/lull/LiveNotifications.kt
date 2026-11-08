@@ -50,6 +50,17 @@ class LiveNotifications(private val context: Context) {
     @Serializable
     internal data class Shown(val content: LiveContent, val staleAt: Long, val postedAt: Long = 0)
 
+    /** What an alarm does with the Live Update while Lull is closed. */
+    internal sealed interface Tick {
+        /** Taken down, and no more alarms booked. */
+        data object End : Tick
+        data class Keep(val shown: Shown) : Tick
+        data class Post(val content: LiveContent) : Tick
+    }
+
+    /** The alarms to book for what is up: when to redraw it, and when to wake the phone for it. */
+    internal data class Alarms(val redraw: Long?, val wake: Long?)
+
     private val manager = NotificationManagerCompat.from(context)
 
     /**
@@ -72,9 +83,10 @@ class LiveNotifications(private val context: Context) {
     /** Moves the Live Update on to where each night is now, and lets go of each BedJet whose time has run out. */
     fun tick(now: Long = System.currentTimeMillis()) {
         val before = current() ?: return
-        val sides = before.content.sides.filter { it.status.endsAt > now }
-        val next = if (sides.isEmpty()) null else before.content.copy(sides = sides).let { content ->
-            decide(before, content, ::isShowing, bootedAt(now), now) ?: post(content, now)
+        val next = when (val tick = ticked(before, manager.areNotificationsEnabled(), ::isShowing, bootedAt(now), now)) {
+            Tick.End -> null
+            is Tick.Keep -> tick.shown
+            is Tick.Post -> post(tick.content, now)
         }
         commit(before, next, now)
     }
@@ -93,13 +105,13 @@ class LiveNotifications(private val context: Context) {
 
     private fun post(content: LiveContent, now: Long): Shown {
         ensureChannel()
-        // Checked by `show` and `tick`, which only redraw what is allowed and already up.
+        // Checked by `show` and `ticked`, which only post what is allowed, and while Lull is closed only what is up.
         @Suppress("MissingPermission")
         manager.notify(TAG, NOTIFICATION_ID, build(content, now))
         // A night's progress bar only moves when redrawn, so it is redrawn every few minutes, as the widgets are;
         // the iPhone's moves by itself.
         val redraw = if (content.sides.any { it.status is LiveStatus.Night }) now + REDRAW_INTERVAL else Long.MAX_VALUE
-        return Shown(content, minOf(content.staleAt(now), redraw), postedAt = now)
+        return Shown(content, minOf(content.staleDate(now), redraw), postedAt = now)
     }
 
     private fun build(content: LiveContent, now: Long): Notification {
@@ -194,16 +206,25 @@ class LiveNotifications(private val context: Context) {
         )
     }
 
-    /** Wakes Lull at the next phase change, or not at all once nothing is up. */
+    /** Books the next redraw and wake-up, or none once nothing is up. */
     private fun scheduleNext(shown: Shown?, now: Long) {
-        val alarms = context.getSystemService(AlarmManager::class.java) ?: return
-        val tick = PendingIntent.getBroadcast(
-            context, 0, Intent(context, LiveNotificationReceiver::class.java),
+        val alarmManager = context.getSystemService(AlarmManager::class.java) ?: return
+        fun receiver(request: Int) = PendingIntent.getBroadcast(
+            context, request, Intent(context, LiveNotificationReceiver::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val next = shown?.staleAt?.takeIf { it != Long.MAX_VALUE }
-        // Inexact is close enough: a phase shown a minute late still counts down to the right end.
-        if (next == null) alarms.cancel(tick) else alarms.set(AlarmManager.RTC, maxOf(next, now), tick)
+        val (redraw, wake) = alarms(shown)
+        val redrawTick = receiver(REDRAW_REQUEST)
+        val wakeTick = receiver(WAKE_REQUEST)
+        // Inexact is close enough: a phase shown a minute late still counts down to the right end. Redraws wait for the
+        // phone to wake, since nobody sees a progress bar while it sleeps.
+        if (redraw == null) alarmManager.cancel(redrawTick) else alarmManager.set(AlarmManager.RTC, maxOf(redraw, now), redrawTick)
+        // Allowed while idle, as it comes once a night at most, and inexact, so it needs no exact-alarm permission.
+        if (wake == null) {
+            alarmManager.cancel(wakeTick)
+        } else {
+            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, maxOf(wake, now), wakeTick)
+        }
     }
 
     private val file get() = File(context.filesDir, "live.json")
@@ -234,6 +255,8 @@ class LiveNotifications(private val context: Context) {
         private const val TAG = "live"
         private const val NOTIFICATION_ID = 1
         private const val REDRAW_INTERVAL = 300_000L
+        private const val REDRAW_REQUEST = 0
+        private const val WAKE_REQUEST = 1
 
         /**
          * What is up, kept for the life of the process. The BedJet reports every second, so `live.json` is only
@@ -272,6 +295,36 @@ class LiveNotifications(private val context: Context) {
             now < last.staleAt -> last
             !isShowing() -> last.copy(staleAt = Long.MAX_VALUE)
             else -> null
+        }
+
+        /**
+         * What an alarm does with the Live Update while Lull is closed. The iPhone can't bring back a Live Activity while
+         * Lull is closed, and neither does this:
+         * - Notifications turned off: taken down, rather than booking redraws nobody can see.
+         * - Every BedJet's time run out: taken down.
+         * - Swiped away: kept down, and never redrawn, even once one side of the bed ends. Lull showing something new
+         *   brings it back, as it does on the iPhone.
+         * - Otherwise as [decide], with each BedJet whose time has run out taken out.
+         */
+        internal fun ticked(last: Shown, notificationsEnabled: Boolean, isShowing: () -> Boolean, bootedAt: Long, now: Long): Tick {
+            val sides = last.content.sides.filter { it.status.endsAt > now }
+            if (!notificationsEnabled || sides.isEmpty()) return Tick.End
+            if (last.staleAt == Long.MAX_VALUE) return Tick.Keep(last)
+            if (last.postedAt >= bootedAt && !isShowing()) return Tick.Keep(last.copy(staleAt = Long.MAX_VALUE))
+            val content = last.content.copy(sides = sides)
+            return decide(last, content, isShowing, bootedAt, now)?.let { Tick.Keep(it) } ?: Tick.Post(content)
+        }
+
+        /**
+         * A redraw at [Shown.staleAt], which doesn't wake the phone. With two BedJets, the phone is also woken when the
+         * first ends, to take it out: the system takes the Live Update down only at the last one's end, so the other
+         * would count down to a time already past while the phone sleeps. Neither once it's swiped away or gone.
+         */
+        internal fun alarms(shown: Shown?): Alarms {
+            if (shown == null || shown.staleAt == Long.MAX_VALUE) return Alarms(redraw = null, wake = null)
+            val ends = shown.content.sides.map { it.status.endsAt }
+            val last = ends.max()
+            return Alarms(redraw = shown.staleAt, wake = ends.filter { it < last }.minOrNull())
         }
     }
 }
@@ -328,15 +381,23 @@ data class LiveSide(
         status.differsEnough(shown.status) || name != shown.name || generation != shown.generation
 }
 
-/** What the Live Update shows: each BedJet running from this phone, in the order Lull lists them. */
+/**
+ * What the Live Update shows: each BedJet running from this phone, in the order Lull lists them. It carries whole
+ * schedules: it is only kept in `live.json` and drawn on the phone, where the iPhone's Live Activity, which ActivityKit
+ * limits to 4 KB, carries each night without its IDs.
+ */
 @Serializable
 data class LiveContent(val sides: List<LiveSide>, val useFahrenheit: Boolean) {
     fun differsEnough(shown: LiveContent): Boolean =
         sides.map { it.id } != shown.sides.map { it.id } || useFahrenheit != shown.useFahrenheit ||
             sides.zip(shown.sides).any { (side, shownSide) -> side.differsEnough(shownSide) }
 
-    /** When what's shown may stop being true unless Lull updates it: the soonest of its BedJets'. */
-    fun staleAt(now: Long): Long = sides.minOf { it.status.staleAt(now) }
+    /**
+     * When what's shown may stop being true unless Lull updates it: the soonest of its BedJets', including one that ends
+     * before the other, which is then taken out. The iPhone leaves that out of its one stale date, since there it would
+     * hide the other side's phase.
+     */
+    fun staleDate(now: Long): Long = sides.minOf { it.status.staleDate(now) }
 
     /** When the last of its BedJets' nights or timers ends. */
     val endsAt: Long get() = sides.maxOf { it.status.endsAt }

@@ -44,7 +44,7 @@ class LiveStatusTest {
         val live = LiveStatus.of(null, status(Mode.HEAT, target = 66, fanStep = 7, seconds = 2700), generation = Generation.V3, now = now)
         assertEquals(LiveStatus.Air(Mode.HEAT, temperature = 66, fanPercent = 40, endsAt = now + 2_700_000), live)
         assertEquals(now + 2_700_000, live?.endsAt)
-        assertEquals(now + 2_700_000, live?.staleAt(now))
+        assertEquals(now + 2_700_000, live?.staleDate(now))
     }
 
     @Test
@@ -87,8 +87,8 @@ class LiveStatusTest {
         val night = run(startedMinutesAgo = 60)
         val live = LiveStatus.Night(night)
         // Cool Drift's first phase is 45 minutes; an hour in, the second ends at 45 + 300.
-        assertEquals(night.phaseEnds[1], live.staleAt(now))
-        assertEquals(night.endsAt, live.staleAt(night.endsAt))
+        assertEquals(night.phaseEnds[1], live.staleDate(now))
+        assertEquals(night.endsAt, live.staleDate(night.endsAt))
         assertEquals(night.endsAt, live.endsAt)
     }
 
@@ -144,7 +144,7 @@ class LiveStatusTest {
     private val bootedAt = now - 3_600_000
 
     private fun shown(content: LiveContent = night, postedAt: Long = now) =
-        LiveNotifications.Shown(content, content.staleAt(now), postedAt)
+        LiveNotifications.Shown(content, content.staleDate(now), postedAt)
 
     private fun LiveContent.renamed() = copy(sides = listOf(sides[0].copy(name = "Left")))
 
@@ -183,8 +183,9 @@ class LiveStatusTest {
         assertNull(LiveNotifications.content(emptyList(), true, both, now))
         // One side stops, and the other carries on alone.
         assertEquals(listOf(theirs), LiveNotifications.content(listOf(theirs to LiveNotifications.Wanted.Show(air)), true, both, now)?.sides?.map { it.id })
-        // When it ends soonest, so does what the whole may be trusted for.
-        assertEquals(minOf(night.staleAt(now), now + 600_000), both.staleAt(now))
+        // When it ends soonest, it's due for a redraw, to be taken out. The iPhone leaves it out of its one stale date,
+        // which would hide the other side's phase there.
+        assertEquals(minOf(night.staleDate(now), now + 600_000), both.staleDate(now))
     }
 
     @Test
@@ -204,5 +205,46 @@ class LiveStatusTest {
     fun aLiveUpdateTakenDownByARestartComesBack() {
         // Posted before the phone restarted, so it isn't showing because it was swiped away.
         assertNull(LiveNotifications.decide(shown(postedAt = bootedAt - 1), night, { false }, bootedAt, now))
+    }
+
+    /** iOS has no twin: Lull can't run there while it's closed, so nothing can bring a Live Activity back. */
+    @Test
+    fun anAlarmLeavesALiveUpdateDownOnceSwipedAwayOrTurnedOff() {
+        val air = side(LiveStatus.Air(Mode.HEAT, 66, 40, now + 600_000), id = theirs, name = "Other side")
+        val both = shown(LiveContent(night.sides + air, useFahrenheit = true))
+        val airEnded = now + 601_000
+        fun ticked(shown: LiveNotifications.Shown, enabled: Boolean = true, showing: Boolean = true, at: Long = now) =
+            LiveNotifications.ticked(shown, enabled, { showing }, bootedAt, at)
+
+        assertEquals(LiveNotifications.Tick.Keep(both), ticked(both))
+        // One side of the bed ends: taken out, and the other redrawn alone.
+        assertEquals(LiveNotifications.Tick.Post(night), ticked(both, at = airEnded))
+        // Swiped away: kept down, and never redrawn, even when a side ends.
+        val swiped = LiveNotifications.Tick.Keep(both.copy(staleAt = Long.MAX_VALUE))
+        assertEquals(swiped, ticked(both, showing = false, at = airEnded))
+        assertEquals(swiped, ticked(swiped.shown, showing = false, at = airEnded))
+        // Taken down by a restart rather than swiped away: posted again.
+        assertEquals(LiveNotifications.Tick.Post(night), ticked(both.copy(postedAt = bootedAt - 1), showing = false, at = airEnded))
+        // Notifications turned off, or every BedJet's time run out: taken down, with no more alarms.
+        assertEquals(LiveNotifications.Tick.End, ticked(both, enabled = false))
+        assertEquals(LiveNotifications.Tick.End, ticked(both, at = night.endsAt))
+    }
+
+    /** iOS has no twin: Lull can't run there while it's closed. */
+    @Test
+    fun onlyTheFirstEndOfTwoWakesThePhone() {
+        // A night alone is redrawn when the phone next wakes, and the system takes it down at its end.
+        val alone = shown()
+        assertEquals(LiveNotifications.Alarms(redraw = alone.staleAt, wake = null), LiveNotifications.alarms(alone))
+        // With a BedJet on each side, the phone is woken when the first ends, to take it out.
+        val air = side(LiveStatus.Air(Mode.HEAT, 66, 40, now + 600_000), id = theirs)
+        val both = shown(LiveContent(night.sides + air, useFahrenheit = true))
+        assertEquals(LiveNotifications.Alarms(redraw = now + 600_000, wake = now + 600_000), LiveNotifications.alarms(both))
+        val sameEnd = side(LiveStatus.Air(Mode.HEAT, 66, 40, night.endsAt), id = theirs)
+        assertNull(LiveNotifications.alarms(shown(LiveContent(night.sides + sameEnd, useFahrenheit = true))).wake)
+        // Swiped away, or gone: none.
+        val none = LiveNotifications.Alarms(redraw = null, wake = null)
+        assertEquals(none, LiveNotifications.alarms(both.copy(staleAt = Long.MAX_VALUE)))
+        assertEquals(none, LiveNotifications.alarms(null))
     }
 }
