@@ -595,27 +595,149 @@ final class DeviceSelectionTests: XCTestCase {
         XCTAssertNil(LiveStatus.of(run: bedJet.run, status: bedJet.status, reportedAt: bedJet.statusReceivedAt,
                                    generation: bedJet.generation))
     }
+
+    func testAReportSentBeforeOffDoesntTurnTheBedJetBackOn() async throws {
+        let window = BedJet.staleReportWindow
+        BedJet.staleReportWindow = 0.5
+        defer { BedJet.staleReportWindow = window }
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        await bedJet.setMode(.cool)
+        let running = try XCTUnwrap(bedJet.status)
+        XCTAssertTrue(running.isRunning)
+
+        // The BedJet reports every second, so one it sent while still cooling can arrive just after it took Off.
+        let link = unit(mine.id)
+        link.reports = false
+        let off = Task { await bedJet.setMode(.standby) }
+        try await waitUntil("Off to be taken") { bedJet.status?.mode == .standby }
+        link.onStatus?(running)
+        XCTAssertEqual(bedJet.status?.mode, .standby)
+        XCTAssertNil(LiveStatus.of(run: bedJet.run, status: bedJet.status, reportedAt: bedJet.statusReceivedAt,
+                                   generation: bedJet.generation))
+
+        // Later, a report that it's running is believed: someone turned it on again.
+        await off.value
+        try await Task.sleep(nanoseconds: 600_000_000)
+        link.onStatus?(running)
+        XCTAssertEqual(bedJet.status?.mode, .cool)
+    }
+
+    // MARK: From outside the app
+
+    func testAQuickRemoteButtonSetsItsBedJetOnceItConnects() async throws {
+        let model = launch()
+        model.choose(mine)
+        model.choose(partners)
+        let first = try bedJet(mine, in: model)
+        // Tapped as Lull opens, before that BedJet has connected: it's shown, and set once it says what it's doing.
+        await model.applyQuickRemote(RemotePreset(mode: .heat, minutes: 45, temperature: 70, fanPercent: 30), to: first.id)
+        XCTAssertEqual(model.bedJet?.id, first.id)
+
+        let link = unit(mine.id), sent = link.sent
+        let mode = try XCTUnwrap(sent.firstIndex(of: XCTUnwrap(Codec.setMode(.heat))))
+        let temperature = try XCTUnwrap(sent.firstIndex(of: Codec.setTemperature(70)))
+        let fan = try XCTUnwrap(sent.firstIndex(of: Codec.setFan(step: 5)))
+        XCTAssertLessThan(mode, temperature)
+        XCTAssertLessThan(temperature, fan)
+        // Last, the time, which the mode, temperature and fan each stretched to the longest Heat allows.
+        XCTAssertEqual(timerCommands(link).last, Codec.setRuntime(minutes: 45))
+        XCTAssertGreaterThan(try XCTUnwrap(sent.lastIndex(of: Codec.setRuntime(minutes: 45))), fan)
+        XCTAssertEqual(link.lastStatus?.mode, .heat)
+        XCTAssertEqual(link.lastStatus?.targetTemperature, 70)
+        XCTAssertEqual(try remainingSeconds(link), 45 * 60, accuracy: 15)
+        // The other BedJet is left as it was.
+        XCTAssertFalse(unit(partners.id).sent.contains(try XCTUnwrap(Codec.setMode(.heat))))
+    }
+
+    func testAWidgetNeverTakesABedJetFromAnotherPhone() async throws {
+        // The partner's phone has their BedJet, which this phone knows too.
+        setups[partners.id] = { $0.heldElsewhere = true }
+        let model = launch()
+        model.choose(partners)
+        model.choose(mine)
+        _ = try await connected(mine, in: model)
+        let theirs = try bedJet(partners, in: model)
+        XCTAssertEqual(theirs.linkState, .yielded)
+
+        // A widget set to their side opens Lull on it, but no button on it asks their phone for it.
+        await model.applyQuickRemote(RemotePreset.defaults[2], to: theirs.id)
+        XCTAssertEqual(model.bedJet?.id, theirs.id)
+        await model.startNight(on: theirs.id)
+        XCTAssertEqual(unit(partners.id).requests, 0)
+        XCTAssertEqual(unit(partners.id).sent, [])
+        XCTAssertNil(theirs.run)
+
+        // Touching a control in Lull still takes it over, as the Remote says it will.
+        await theirs.setMode(.heat)
+        XCTAssertEqual(unit(partners.id).requests, 1)
+        XCTAssertTrue(unit(partners.id).sent.contains(try XCTUnwrap(Codec.setMode(.heat))))
+    }
+
+    func testAWidgetLeavesAScheduleFromAnotherPhoneRunning() async throws {
+        // The partner's phone started a schedule on this BedJet, then let go of it, as Lull does off screen.
+        let theirs = StoredProgram(name: "Theirs", steps: [ProgramStep(mode: .cool, fanStep: 7, temperature: 40, hours: 2, minutes: 0)])
+        setups[mine.id] = { $0.device = DemoLink(name: "BEDJET_3", slots: [theirs, nil, nil]) }
+        try await unit(mine.id).device.startProgram(slot: 0)
+        XCTAssertGreaterThan(unit(mine.id).device.programStep, 0)
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        XCTAssertNotNil(bedJet.runningElsewhereStep)
+
+        // Neither Off on a Quick Remote nor Start Night ends it.
+        let sent = unit(mine.id).sent
+        await model.applyQuickRemote(RemotePreset.defaults[2], to: nil)
+        await model.startNight(on: bedJet.id)
+        XCTAssertEqual(unit(mine.id).sent, sent)
+        XCTAssertGreaterThan(unit(mine.id).device.programStep, 0)
+        XCTAssertNil(bedJet.run)
+    }
+
+    func testAQuickRemoteButtonDoesNothingItCant() async throws {
+        setups[mine.id] = { $0.generation = .v2 }
+        let model = launch()
+        model.choose(partners)
+        model.choose(mine)
+        let first = try await connected(mine, in: model)
+        // What Lull reads from a BedJet on connecting is done.
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+        let sent = unit(mine.id).sent
+
+        // Dry, which a V2 lacks, and a BedJet forgotten since, or never known.
+        await model.applyQuickRemote(RemotePreset(mode: .dry, minutes: 45, temperature: 60, fanPercent: 60), to: first.id)
+        await model.applyQuickRemote(RemotePreset.defaults[0], to: UUID())
+        XCTAssertEqual(unit(mine.id).sent, sent)
+        XCTAssertEqual(model.bedJet?.id, first.id)
+        XCTAssertFalse(unit(partners.id).sent.contains(try XCTUnwrap(Codec.setMode(.cool))))
+    }
 }
 
 /// A BedJet for tests. It speaks like the simulated one, but connects only when allowed, records every command,
-/// can hold a command in flight, and keeps its state between connections like a real unit.
+/// can hold a command in flight, and keeps its state between connections like a real unit. It can be held by another
+/// phone, and then only connects when asked for.
 @MainActor
 final class FakeLink: BedJetLink {
     var device: DemoLink { didSet { attach() } }
     var generation: Generation = .v3
     var answers = true
+    /// Another phone has the BedJet: it connects only once asked for, as a hand-over request does.
+    var heldElsewhere = false
     var holdsSends = false
     /// Off, the unit takes commands but its reports never arrive, as when Lull lets go of it first.
     var reports = true
     private(set) var sent: [Data] = []
     private(set) var stops = 0
+    /// How many times another phone was asked to hand the BedJet over.
+    private(set) var requests = 0
     private var held: [CheckedContinuation<Void, Never>] = []
     var isHolding: Bool { !held.isEmpty }
     var heldCount: Int { held.count }
 
     var onStateChange: ((LinkState) -> Void)?
     var onStatus: ((DeviceStatus) -> Void)?
-    var state: LinkState { device.state }
+    var state: LinkState { heldElsewhere ? .yielded : device.state }
     var lastStatus: DeviceStatus? { device.lastStatus }
 
     init(name: String) {
@@ -629,6 +751,10 @@ final class FakeLink: BedJetLink {
     }
 
     func start() {
+        if heldElsewhere {
+            onStateChange?(.yielded)
+            return
+        }
         device.answers = answers
         device.start()
     }
@@ -638,7 +764,11 @@ final class FakeLink: BedJetLink {
         device.stop()
     }
 
-    func requestControl() { start() }
+    func requestControl() {
+        requests += 1
+        heldElsewhere = false
+        start()
+    }
 
     func send(_ command: Data) async throws {
         if holdsSends { await withCheckedContinuation { held.append($0) } }

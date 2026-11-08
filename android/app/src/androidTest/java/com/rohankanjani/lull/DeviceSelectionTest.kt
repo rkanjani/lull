@@ -16,6 +16,7 @@ import com.rohankanjani.lull.bedjetkit.Mode
 import com.rohankanjani.lull.bedjetkit.NearbyBedJet
 import com.rohankanjani.lull.bedjetkit.ProgramStep
 import com.rohankanjani.lull.bedjetkit.StoredProgram
+import com.rohankanjani.lull.bedjetkit.startProgram
 import com.rohankanjani.lull.bedjetkit.takes
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -686,11 +687,138 @@ class DeviceSelectionTest {
         assertEquals(Mode.STANDBY, bedJet.status?.mode)
         assertNull(LiveStatus.of(bedJet.run, bedJet.status, bedJet.statusReceivedAt, bedJet.generation))
     }
+
+    @Test
+    fun aReportSentBeforeOffDoesntTurnTheBedJetBackOn() = onMain {
+        val window = BedJet.staleReportWindow
+        BedJet.staleReportWindow = 500
+        try {
+            val model = launch()
+            model.choose(mine)
+            val bedJet = connected(mine, model)
+            bedJet.setMode(Mode.COOL)
+            val running = requireNotNull(bedJet.status)
+            assertTrue(running.isRunning)
+
+            // The BedJet reports every second, so one it sent while still cooling can arrive just after it took Off.
+            val link = unit(mine.id)
+            link.reports = false
+            val off = async { bedJet.setMode(Mode.STANDBY) }
+            waitUntil("Off to be taken") { bedJet.status?.mode == Mode.STANDBY }
+            link.onStatus?.invoke(running)
+            assertEquals(Mode.STANDBY, bedJet.status?.mode)
+            assertNull(LiveStatus.of(bedJet.run, bedJet.status, bedJet.statusReceivedAt, bedJet.generation))
+
+            // Later, a report that it's running is believed: someone turned it on again.
+            off.await()
+            delay(600)
+            link.onStatus?.invoke(running)
+            assertEquals(Mode.COOL, bedJet.status?.mode)
+        } finally {
+            BedJet.staleReportWindow = window
+        }
+    }
+
+    // From outside the app
+
+    @Test
+    fun aQuickRemoteButtonSetsItsBedJetOnceItConnects() = onMain {
+        val model = launch()
+        model.choose(mine)
+        model.choose(partners)
+        val first = bedJet(mine, model)
+        // Tapped as Lull opens, before that BedJet has connected: it's shown, and set once it says what it's doing.
+        model.applyQuickRemote(RemotePreset(Mode.HEAT, 45, 70, 30), to = first.id)
+        assertEquals(first.id, model.bedJet?.id)
+
+        val link = unit(mine.id)
+        val sent = link.sent.toList()
+        val mode = sent.indexOf(Codec.setMode(Mode.HEAT)!!.toList())
+        val temperature = sent.indexOf(Codec.setTemperature(70).toList())
+        val fan = sent.indexOf(Codec.setFan(5).toList())
+        assertTrue(mode >= 0)
+        assertTrue(mode < temperature)
+        assertTrue(temperature < fan)
+        // Last, the time, which the mode, temperature and fan each stretched to the longest Heat allows.
+        assertEquals(Codec.setRuntime(45).toList(), timerCommands(link).last())
+        assertTrue(sent.lastIndexOf(Codec.setRuntime(45).toList()) > fan)
+        assertEquals(Mode.HEAT, link.lastStatus?.mode)
+        assertEquals(70, link.lastStatus?.targetTemperature)
+        assertAbout(45 * 60, remainingSeconds(link))
+        // The other BedJet is left as it was.
+        assertFalse(unit(partners.id).sent.contains(Codec.setMode(Mode.HEAT)!!.toList()))
+    }
+
+    @Test
+    fun aWidgetNeverTakesABedJetFromAnotherPhone() = onMain {
+        // The partner's phone has their BedJet, which this phone knows too.
+        setups[partners.id] = { it.heldElsewhere = true }
+        val model = launch()
+        model.choose(partners)
+        model.choose(mine)
+        connected(mine, model)
+        val theirs = bedJet(partners, model)
+        assertEquals(LinkState.YIELDED, theirs.linkState)
+
+        // A widget set to their side opens Lull on it, but no button on it asks their phone for it.
+        model.applyQuickRemote(RemotePreset.defaults[2], to = theirs.id)
+        assertEquals(theirs.id, model.bedJet?.id)
+        model.startNight(on = theirs.id)
+        assertEquals(0, unit(partners.id).requests)
+        assertEquals(emptyList<List<Byte>>(), unit(partners.id).sent)
+        assertNull(theirs.run)
+
+        // Touching a control in Lull still takes it over, as the Remote says it will.
+        theirs.setMode(Mode.HEAT)
+        assertEquals(1, unit(partners.id).requests)
+        assertTrue(unit(partners.id).sent.contains(Codec.setMode(Mode.HEAT)!!.toList()))
+    }
+
+    @Test
+    fun aWidgetLeavesAScheduleFromAnotherPhoneRunning() = onMain {
+        // The partner's phone started a schedule on this BedJet, then let go of it, as Lull does off screen.
+        val theirs = StoredProgram("Theirs", listOf(ProgramStep(Mode.COOL, fanStep = 7, temperature = 40, hours = 2, minutes = 0)))
+        setups[mine.id] = { it.device = DemoLink("BEDJET_3", listOf(theirs, null, null), units) }
+        unit(mine.id).device.startProgram(0)
+        assertTrue(unit(mine.id).device.programStep > 0)
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        assertNotNull(bedJet.runningElsewhereStep)
+
+        // Neither Off on a Quick Remote nor Start Night ends it.
+        val sent = unit(mine.id).sent.toList()
+        model.applyQuickRemote(RemotePreset.defaults[2], to = null)
+        model.startNight(on = bedJet.id)
+        assertEquals(sent, unit(mine.id).sent)
+        assertTrue(unit(mine.id).device.programStep > 0)
+        assertNull(bedJet.run)
+    }
+
+    @Test
+    fun aQuickRemoteButtonDoesNothingItCant() = onMain {
+        setups[mine.id] = { it.generation = Generation.V2 }
+        val model = launch()
+        model.choose(partners)
+        model.choose(mine)
+        val first = connected(mine, model)
+        // What Lull reads from a BedJet on connecting is done.
+        delay(2_000)
+        val sent = unit(mine.id).sent.toList()
+
+        // Dry, which a V2 lacks, and a BedJet forgotten since, or never known.
+        model.applyQuickRemote(RemotePreset(Mode.DRY, 45, 60, 60), to = first.id)
+        model.applyQuickRemote(RemotePreset.defaults[0], to = UUID.randomUUID().toString())
+        assertEquals(sent, unit(mine.id).sent)
+        assertEquals(first.id, model.bedJet?.id)
+        assertFalse(unit(partners.id).sent.contains(Codec.setMode(Mode.COOL)!!.toList()))
+    }
 }
 
 /**
  * A BedJet for tests. It speaks like the simulated one, but connects only when allowed, records every command,
- * can hold a command in flight, and keeps its state between connections like a real unit.
+ * can hold a command in flight, and keeps its state between connections like a real unit. It can be held by another
+ * phone, and then only connects when asked for.
  */
 class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
     var device: DemoLink = DemoLink(name, scope = scope)
@@ -700,11 +828,16 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
         }
     override var generation: Generation = Generation.V3
     var answers = true
+    /** Another phone has the BedJet: it connects only once asked for, as a hand-over request does. */
+    var heldElsewhere = false
     var holdsSends = false
     /** Off, the unit takes commands but its reports never arrive, as when Lull lets go of it first. */
     var reports = true
     val sent = mutableListOf<List<Byte>>()
     var stops = 0
+        private set
+    /** How many times another phone was asked to hand the BedJet over. */
+    var requests = 0
         private set
     private val held = mutableListOf<CompletableDeferred<Unit>>()
     val isHolding: Boolean get() = held.isNotEmpty()
@@ -712,7 +845,7 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
 
     override var onStateChange: ((LinkState) -> Unit)? = null
     override var onStatus: ((DeviceStatus) -> Unit)? = null
-    override val state: LinkState get() = device.state
+    override val state: LinkState get() = if (heldElsewhere) LinkState.YIELDED else device.state
     override val lastStatus: DeviceStatus? get() = device.lastStatus
 
     init {
@@ -725,6 +858,10 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
     }
 
     override fun start() {
+        if (heldElsewhere) {
+            onStateChange?.invoke(LinkState.YIELDED)
+            return
+        }
         device.answers = answers
         device.start()
     }
@@ -734,7 +871,11 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
         device.stop()
     }
 
-    override fun requestControl() = start()
+    override fun requestControl() {
+        requests += 1
+        heldElsewhere = false
+        start()
+    }
 
     override suspend fun send(command: ByteArray) {
         if (holdsSends) CompletableDeferred<Unit>().also { held += it }.await()

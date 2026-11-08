@@ -32,6 +32,8 @@ struct WidgetEyebrow: View {
 struct ModeLabel: View {
     let mode: Mode
     var size: CGFloat = 11
+    /// The mode's own colour unless given another, such as plain white for StandBy at night.
+    var tint: Color?
 
     var body: some View {
         HStack(spacing: 4) {
@@ -39,7 +41,7 @@ struct ModeLabel: View {
             Text(mode.activity.uppercased()).tracking(1.2)
         }
         .font(.system(size: size, weight: .semibold))
-        .foregroundStyle(mode.tint)
+        .foregroundStyle(tint ?? mode.tint)
         .lineLimit(1)
         .widgetAccentable()
     }
@@ -130,7 +132,7 @@ extension Format {
 // MARK: Running
 
 /// Time left, counted down by the system so it stays right while Lull is closed. A timer takes all the width it's
-/// given, which crowds the compact Dynamic Island, so it is laid over a hidden template of the widest
+/// given, which crowds the compact Dynamic Island and small widgets, so it is laid over a hidden template of the widest
 /// it will read from now on ("00:00:00" with ten hours or more left). Its seconds stay: the system's live formats
 /// either show them or spell out "7 hours, 44 minutes".
 struct Countdown: View {
@@ -254,12 +256,26 @@ private struct Switch: View {
     }
 }
 
+extension Mode {
+    /// The mode's colour, except where iOS draws widgets in one colour (StandBy at night, the Lock Screen), where a
+    /// colour would only make the text fainter.
+    func widgetTint(_ rendering: WidgetRenderingMode) -> Color {
+        rendering == .fullColor ? tint : .primary
+    }
+}
+
 extension LiveStatus {
     /// "Ends 6:30 AM" through a night, "Turns off at 1:30 AM" for air from the Remote.
     var ending: String {
         let time = endsAt.formatted(date: .omitted, time: .shortened)
         if case .night = self { return "Ends \(time)" }
         return "Turns off at \(time)"
+    }
+
+    /// Where a tap takes Lull: the Schedule for a night, the Remote for air.
+    var tab: LullTab {
+        if case .night = self { return .schedule }
+        return .remote
     }
 }
 

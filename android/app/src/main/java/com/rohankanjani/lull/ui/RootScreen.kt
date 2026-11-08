@@ -98,13 +98,13 @@ fun RootScreen(model: AppModel) {
                     command.bedJet?.let(model::select)
                     selectedTab = command.tab.ordinal
                 }
-                AppCommands.Command.StartNight -> {
+                is AppCommands.Command.Remote -> {
+                    selectedTab = LullTab.REMOTE.ordinal
+                    model.scope.launch { model.applyQuickRemote(command.preset, to = command.bedJet) }
+                }
+                is AppCommands.Command.StartNight -> {
                     selectedTab = LullTab.SCHEDULE.ordinal
-                    // A night already under way, from this phone or another, is left running and shown.
-                    val shown = model.bedJet
-                    if (shown != null && shown.run == null && shown.runningElsewhereStep == null && !shown.isBusy) {
-                        model.scope.launch { shown.startTonight() }
-                    }
+                    model.scope.launch { model.startNight(on = command.bedJet) }
                 }
             }
         }
