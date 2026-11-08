@@ -366,4 +366,19 @@ class WidgetTest {
         assertEquals(edited, QuickRemoteWidget.choices(QuickRemoteWidget.save(edited)))
         assertEquals(PresetChoice.defaults, QuickRemoteWidget.choices("not what Lull saved"))
     }
+
+    @Test
+    fun quickRemoteTemperaturesSurviveSwitchingUnits() {
+        // Set up in °F and then shown in °C, or the other way round, a button keeps its temperature.
+        val heat = PresetChoice(Mode.HEAT, 15, degrees = 90)
+        assertEquals(64, heat.preset(fahrenheit = true).temperature)
+        assertEquals(64, heat.preset(fahrenheit = false).temperature)
+        val cool = PresetChoice(Mode.COOL, 30, degrees = 20)
+        assertEquals(40, cool.preset(fahrenheit = false).temperature)
+        assertEquals(40, cool.preset(fahrenheit = true).temperature)
+        // Degrees the BedJet takes in neither unit are read in the one Lull shows.
+        val mistyped = PresetChoice(Mode.HEAT, 15, degrees = 50)
+        assertEquals(Mode.HEAT.temperatureRange.first, mistyped.preset(fahrenheit = true).temperature)
+        assertEquals(Mode.HEAT.temperatureRange.last, mistyped.preset(fahrenheit = false).temperature)
+    }
 }

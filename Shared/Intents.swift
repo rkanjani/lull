@@ -180,8 +180,8 @@ struct RemotePreset: Hashable {
     }
 }
 
-/// One Quick Remote button as set up when editing the widget. Its temperature is in the degrees Lull shows, as the
-/// person typed it, or nil for the mode's usual temperature.
+/// One Quick Remote button as set up when editing the widget. Its temperature is in degrees, as the person typed it, or
+/// nil for the mode's usual temperature.
 struct PresetChoice: Hashable {
     var mode: Mode
     var minutes: Int
@@ -196,8 +196,21 @@ struct PresetChoice: Hashable {
 
     /// What the button sets, in the BedJet's units and within what it takes.
     func preset(fahrenheit: Bool) -> RemotePreset {
-        let temperature = degrees.map { Format.halfCelsius(fromDegrees: $0, fahrenheit: fahrenheit) } ?? mode.defaultTemperature
+        let temperature = degrees.map { Self.halfCelsius(fromDegrees: $0, fahrenheit: fahrenheit) } ?? mode.defaultTemperature
         return RemotePreset(mode: mode, minutes: minutes, temperature: temperature, fanPercent: fanPercent).clamped
+    }
+
+    /// Degrees as typed, in half-degrees Celsius. The BedJet's temperatures never overlap between the two units, 19 to
+    /// 43 °C and 66 to 109 °F, so degrees in either range are read in that unit: a button set up before Lull switched
+    /// between °F and °C keeps its temperature, where 90 °F read as 90 °C would be Heat's hottest. Only degrees outside
+    /// both, typed by mistake, are read in the unit Lull shows.
+    static func halfCelsius(fromDegrees degrees: Int, fahrenheit: Bool) -> Int {
+        let ranges = Mode.allCases.map(\.temperatureRange)
+        let lowest = ranges.map(\.lowerBound).min() ?? 0, highest = ranges.map(\.upperBound).max() ?? 0
+        let typedIn = [false, true].first { unit in
+            (Format.degrees(lowest, fahrenheit: unit)...Format.degrees(highest, fahrenheit: unit)).contains(degrees)
+        } ?? fahrenheit
+        return Format.halfCelsius(fromDegrees: degrees, fahrenheit: typedIn)
     }
 }
 

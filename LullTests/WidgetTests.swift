@@ -342,4 +342,18 @@ final class WidgetTests: XCTestCase {
         // Kept to what the BedJet takes.
         XCTAssertEqual(cool(100).preset(fahrenheit: true).temperature, 62)
     }
+
+    func testQuickRemoteTemperaturesSurviveSwitchingUnits() {
+        // Set up in °F and then shown in °C, or the other way round, a button keeps its temperature.
+        let heat = PresetChoice(mode: .heat, minutes: 15, degrees: 90, fanPercent: 40)
+        XCTAssertEqual(heat.preset(fahrenheit: true).temperature, 64)
+        XCTAssertEqual(heat.preset(fahrenheit: false).temperature, 64)
+        let cool = PresetChoice(mode: .cool, minutes: 30, degrees: 20, fanPercent: 40)
+        XCTAssertEqual(cool.preset(fahrenheit: false).temperature, 40)
+        XCTAssertEqual(cool.preset(fahrenheit: true).temperature, 40)
+        // Degrees the BedJet takes in neither unit are read in the one Lull shows.
+        let mistyped = PresetChoice(mode: .heat, minutes: 15, degrees: 50, fanPercent: 40)
+        XCTAssertEqual(mistyped.preset(fahrenheit: true).temperature, Mode.heat.temperatureRange.lowerBound)
+        XCTAssertEqual(mistyped.preset(fahrenheit: false).temperature, Mode.heat.temperatureRange.upperBound)
+    }
 }

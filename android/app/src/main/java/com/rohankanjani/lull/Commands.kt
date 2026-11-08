@@ -61,18 +61,34 @@ data class RemotePreset(
 }
 
 /**
- * One Quick Remote button as set up when editing the widget. Its temperature is in the degrees Lull shows, as the
- * person chose it, or null for the mode's usual temperature.
+ * One Quick Remote button as set up when editing the widget. Its temperature is in degrees, as the person chose it, or
+ * null for the mode's usual temperature.
  */
 @Serializable
 data class PresetChoice(val mode: Mode, val minutes: Int, val degrees: Int? = null, val fanPercent: Int = 40) {
     /** What the button sets, in the BedJet's units and within what it takes. */
     fun preset(fahrenheit: Boolean): RemotePreset {
-        val temperature = degrees?.let { Format.halfCelsius(it, fahrenheit) } ?: mode.defaultTemperature
+        val temperature = degrees?.let { halfCelsius(it, fahrenheit) } ?: mode.defaultTemperature
         return RemotePreset(mode, minutes, temperature, fanPercent).clamped
     }
 
     companion object {
+        /**
+         * Degrees as chosen, in half-degrees Celsius. The BedJet's temperatures never overlap between the two units, 19
+         * to 43 °C and 66 to 109 °F, so degrees in either range are read in that unit: a button set up before Lull
+         * switched between °F and °C keeps its temperature, where 90 °F read as 90 °C would be Heat's hottest. Only
+         * degrees outside both, typed by mistake on an iPhone, are read in the unit Lull shows.
+         */
+        fun halfCelsius(fromDegrees: Int, fahrenheit: Boolean): Int {
+            val ranges = Mode.entries.map { it.temperatureRange }
+            val lowest = ranges.minOf { it.first }
+            val highest = ranges.maxOf { it.last }
+            val typedIn = listOf(false, true).firstOrNull { unit ->
+                fromDegrees in Format.degrees(lowest, unit)..Format.degrees(highest, unit)
+            } ?: fahrenheit
+            return Format.halfCelsius(fromDegrees, typedIn)
+        }
+
         val defaults = listOf(
             PresetChoice(Mode.COOL, 30),
             PresetChoice(Mode.HEAT, 15),
