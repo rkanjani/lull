@@ -175,8 +175,15 @@ public final class BLELink: NSObject, BedJetLink {
     public func writeWiFi(network: Data, password: Data) async throws {
         try await serially {
             guard self.state == .ready else { throw BedJetError.notConnected }
-            guard let networkCharacteristic = self.wifiNetwork, let passwordCharacteristic = self.wifiPassword else {
+            guard let peripheral = self.peripheral, let networkCharacteristic = self.wifiNetwork,
+                  let passwordCharacteristic = self.wifiPassword else {
                 throw BedJetError.invalidWiFi(BedJetError.noWiFiSetup)
+            }
+            // A BedJet 3 takes both with a response, which Core Bluetooth sends as a long write when longer than one
+            // packet. One taking them only without a response would get a long name or password cut short instead.
+            for (data, characteristic) in [(network, networkCharacteristic), (password, passwordCharacteristic)]
+            where !characteristic.properties.contains(.write) && data.count > peripheral.maximumWriteValueLength(for: .withoutResponse) {
+                throw BedJetError.invalidWiFi(BedJetError.wifiTooLong)
             }
             try await self.write(network, to: networkCharacteristic)
             try await self.write(password, to: passwordCharacteristic)

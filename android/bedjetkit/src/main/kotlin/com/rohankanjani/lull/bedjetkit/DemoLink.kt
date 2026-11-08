@@ -307,7 +307,8 @@ class DemoLink(
         }
         if (state == LinkState.CONNECTING) state = LinkState.READY
         if (installsUpdate && wifiSteps.isEmpty() && status.extra?.wifiPhase == Codec.WiFiPhase.INSTALLING) return installUpdate()
-        wifiSteps.removeFirstOrNull()?.let { phase -> status = status.copy(extra = status.extra?.copy(wifiPhase = phase)) }
+        // A report without its second half has no Wi-Fi phase, so the next step waits for one that does.
+        if (!firstHalfOnly) wifiSteps.removeFirstOrNull()?.let { phase -> status = status.copy(extra = status.extra?.copy(wifiPhase = phase)) }
         running?.let { if (System.currentTimeMillis() >= it.stepEnds) advanceProgram(it.stepEnds) }
         if (status.mode != Mode.STANDBY && status.mode != Mode.WAIT) {
             status = status.copy(remainingSeconds = maxOf(0, status.remainingSeconds - 1))

@@ -166,6 +166,8 @@ class BleLink(
     private var wifiNetwork: BluetoothGattCharacteristic? = null
     private var wifiPassword: BluetoothGattCharacteristic? = null
     private var statusCharacteristic: BluetoothGattCharacteristic? = null
+    /** The packet size agreed for this connection: Bluetooth's smallest until the BedJet agrees to a larger one. */
+    private var mtu = 23
     private var wantsConnection = false
     private var yieldedUntil = 0L
     private var requestGeneration = 0
@@ -265,6 +267,13 @@ class BleLink(
             if (state != LinkState.READY) throw BedJetError.NotConnected
             val networkCharacteristic = wifiNetwork ?: throw BedJetError.InvalidWiFi(BedJetError.NO_WIFI_SETUP)
             val passwordCharacteristic = wifiPassword ?: throw BedJetError.InvalidWiFi(BedJetError.NO_WIFI_SETUP)
+            // A BedJet 3 takes both with a response, which Android sends as a long (prepared) write when longer than one
+            // packet: at an MTU of 64 that's a password over 61 bytes. One taking them only without a response would get
+            // a long name or password cut short instead.
+            for ((data, characteristic) in listOf(network to networkCharacteristic, password to passwordCharacteristic)) {
+                val writable = characteristic.properties and BluetoothGattCharacteristic.PROPERTY_WRITE != 0
+                if (!writable && data.size > mtu - 3) throw BedJetError.InvalidWiFi(BedJetError.WIFI_TOO_LONG)
+            }
             write(network, networkCharacteristic)
             write(password, passwordCharacteristic)
         }
@@ -739,6 +748,7 @@ class BleLink(
                         adoptLegacyName(gatt.device.address)
                     }
                     linkUpAfter = askedAt?.let { seconds(it) }
+                    mtu = 23
                     // A larger packet fits the whole status in one notification; the unit copes either way.
                     if (!gatt.requestMtu(64)) gatt.discoverServices()
                 } else {
@@ -749,7 +759,11 @@ class BleLink(
         }
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-            main.post { if (gatt === this@BleLink.gatt) gatt.discoverServices() }
+            main.post {
+                if (gatt !== this@BleLink.gatt) return@post
+                if (status == BluetoothGatt.GATT_SUCCESS) this@BleLink.mtu = mtu
+                gatt.discoverServices()
+            }
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {

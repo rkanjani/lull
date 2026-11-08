@@ -269,7 +269,8 @@ public final class DemoLink: BedJetLink {
         }
         if state == .connecting { state = .ready }
         if installsUpdate, wifiSteps.isEmpty, status.extra?.wifiPhase == Codec.WiFiPhase.installing { return installUpdate() }
-        if !wifiSteps.isEmpty { status.extra?.wifiPhase = wifiSteps.removeFirst() }
+        // A report without its second half has no Wi-Fi phase, so the next step waits for one that does.
+        if !firstHalfOnly, !wifiSteps.isEmpty { status.extra?.wifiPhase = wifiSteps.removeFirst() }
         if let run = running, Date() >= run.stepEnds { advanceProgram(from: run.stepEnds) }
         if status.mode != .standby, status.mode != .wait {
             status.remainingSeconds = max(0, status.remainingSeconds - 1)

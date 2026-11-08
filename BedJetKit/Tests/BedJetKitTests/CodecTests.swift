@@ -201,6 +201,31 @@ final class CodecTests: XCTestCase {
         XCTAssertEqual(steps, [1, 2, 3, 4])
     }
 
+    /// The longest name and password a BedJet 3 can be given, as bytes: more than fits in one packet on Android, where
+    /// they go as a long write. They reach the unit whole, accented letters and all.
+    @MainActor
+    func testTheLongestWiFiDetailsReachTheUnitWhole() async throws {
+        let network = String(repeating: "é", count: 16)
+        let password = String(repeating: "p", count: 62) + "!"
+        XCTAssertEqual(Data(network.utf8).count, 32)
+        XCTAssertEqual(Data(password.utf8).count, 63)
+        XCTAssertNil(Codec.wifiProblem(network: network, password: password))
+        // Characters aren't bytes: seventeen of these are 34.
+        XCTAssertNotNil(Codec.wifiProblem(network: network + "é", password: password))
+
+        let scripted = ScriptedWiFiLink([21, 1, 2, 3, 4, 24])
+        try await scripted.joinWiFi(network: network, password: password)
+        XCTAssertEqual(scripted.wifi?.network, Data(network.utf8))
+        XCTAssertEqual(scripted.wifi?.password, Data(password.utf8))
+
+        let demo = DemoLink()
+        demo.start()
+        defer { demo.stop() }
+        try await Task.sleep(nanoseconds: 1_200_000_000)
+        try await demo.joinWiFi(network: network, password: password)
+        XCTAssertEqual(demo.wifiNetwork, network)
+    }
+
     @MainActor
     func testAFailedJoinCountsEvenWhenItRepeatsTheLastResult() async {
         let link = ScriptedWiFiLink([21, 21, 1, 2, 21])
@@ -313,6 +338,28 @@ final class CodecTests: XCTestCase {
         XCTAssertEqual(link.wifiNetwork, "Home")
         let found = try await link.updateFirmware()
         XCTAssertEqual(found, .upToDate)
+    }
+
+    /// Offering newer firmware, the simulated BedJet restarts to check, downloads it, says it's restarting to install
+    /// it, then comes back on it with the offer gone.
+    @MainActor
+    func testSimulatedBedJetInstallsTheFirmwareItOffers() async throws {
+        let link = DemoLink()
+        link.offerFirmwareUpdate()
+        link.start()
+        defer { link.stop() }
+        try await Task.sleep(nanoseconds: 1_200_000_000)
+        XCTAssertEqual(link.lastStatus?.extra?.notification, Codec.Notification.updateAvailable)
+        var steps: [Int] = []
+        let found = try await link.updateFirmware { steps.append($0) }
+        XCTAssertEqual(found, .installing)
+        XCTAssertEqual(steps, [Codec.WiFiPhase.restarting, Codec.WiFiPhase.checking, Codec.WiFiPhase.updating])
+        for _ in 0..<100 where link.firmware != "V1.21 (demo)" || link.lastStatus?.extra == nil {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let firmware = try await link.firmwareVersion()
+        XCTAssertEqual(firmware, "V1.21 (demo)")
+        XCTAssertEqual(link.lastStatus?.extra?.notification, 0)
     }
 }
 

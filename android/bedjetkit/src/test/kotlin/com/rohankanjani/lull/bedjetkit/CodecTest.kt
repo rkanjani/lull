@@ -233,6 +233,33 @@ class CodecTest {
         assertEquals(listOf(1, 2, 3, 4), steps)
     }
 
+    /**
+     * The longest name and password a BedJet 3 can be given, as bytes: more than fits in one packet on Android, where
+     * they go as a long write. They reach the unit whole, accented letters and all.
+     */
+    @Test
+    fun theLongestWiFiDetailsReachTheUnitWhole() = runTest {
+        val network = "é".repeat(16)
+        val password = "p".repeat(62) + "!"
+        assertEquals(32, network.encodeToByteArray().size)
+        assertEquals(63, password.encodeToByteArray().size)
+        assertNull(Codec.wifiProblem(network, password))
+        // Characters aren't bytes: seventeen of these are 34.
+        assertNotNull(Codec.wifiProblem(network + "é", password))
+
+        val scripted = ScriptedWiFiLink(21, 1, 2, 3, 4, 24)
+        scripted.joinWiFi(network, password)
+        assertArrayEquals(network.encodeToByteArray(), scripted.wifi?.first)
+        assertArrayEquals(password.encodeToByteArray(), scripted.wifi?.second)
+
+        val demo = DemoLink(scope = backgroundScope)
+        demo.start()
+        testScheduler.advanceTimeBy(1_200)
+        demo.joinWiFi(network, password)
+        assertEquals(network, demo.wifiNetwork)
+        demo.stop()
+    }
+
     @Test
     fun aFailedJoinCountsEvenWhenItRepeatsTheLastResult() = runTest {
         val link = ScriptedWiFiLink(21, 21, 1, 2, 21)
@@ -341,6 +368,26 @@ class CodecTest {
         link.joinWiFi("Home", "12345678")
         assertEquals("Home", link.wifiNetwork)
         assertEquals(FirmwareUpdate.UpToDate, link.updateFirmware())
+        link.stop()
+    }
+
+    /**
+     * Offering newer firmware, the simulated BedJet restarts to check, downloads it, says it's restarting to install
+     * it, then comes back on it with the offer gone.
+     */
+    @Test
+    fun simulatedBedJetInstallsTheFirmwareItOffers() = runTest {
+        val link = DemoLink(scope = backgroundScope)
+        link.offerFirmwareUpdate()
+        link.start()
+        testScheduler.advanceTimeBy(1_200)
+        assertEquals(Codec.Notification.UPDATE_AVAILABLE, link.lastStatus?.extra?.notification)
+        val steps = mutableListOf<Int>()
+        assertEquals(FirmwareUpdate.Installing, link.updateFirmware { steps += it })
+        assertEquals(listOf(Codec.WiFiPhase.RESTARTING, Codec.WiFiPhase.CHECKING, Codec.WiFiPhase.UPDATING), steps)
+        testScheduler.advanceTimeBy(6_000)
+        assertEquals("V1.21 (demo)", link.firmwareVersion())
+        assertEquals(0, link.lastStatus?.extra?.notification)
         link.stop()
     }
 }

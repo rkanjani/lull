@@ -226,6 +226,8 @@ public enum BedJetError: LocalizedError, Equatable {
     public static let noWiFi = "Only a BedJet 3 has Wi-Fi. A BedJet V2's firmware can't be updated from a phone."
     /// For a BedJet 3 without the characteristics that take Wi-Fi details.
     public static let noWiFiSetup = "This BedJet doesn't take Wi-Fi details from a phone."
+    /// For details longer than one write, where the BedJet only takes writes that can't be split.
+    public static let wifiTooLong = "Your BedJet can't take a Wi-Fi name or password this long from this phone. Try a shorter one."
 
     private static func describe(wifi result: Int) -> String {
         switch result {
