@@ -296,7 +296,7 @@ private suspend fun BedJetLink.storeSequence(steps: List<ProgramStep>) {
     if (!steps.all { generation.supports(it.mode) }) throw BedJetError.InvalidProgram(CodecV2.UNSUPPORTED_MODES)
     val info = v2Info()
     if (!info.runsSequences) {
-        throw BedJetError.InvalidProgram("This BedJet V2's firmware is too old to run schedules, and neither BedJet app can update it. Ask BedJet support about an update.")
+        throw BedJetError.InvalidProgram("This BedJet V2 needs a firmware update before it can run schedules. Update it in the official BedJet app.")
     }
     // Steps can only last a duration, so ones that end at a time of day are measured from now.
     val now = LocalTime.now()
