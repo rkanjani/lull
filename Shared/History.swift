@@ -100,7 +100,7 @@ struct Night: Identifiable {
         var timeline = entries
         for (index, entry) in entries.enumerated() {
             guard case let .scheduleStarted(_, schedulePhases?) = entry.event else { continue }
-            let ended = entries[(index + 1)...].first { if case .air = $0.event { false } else { true } }?.date ?? now
+            let ended = Self.knownEnd(of: entries[index...]) ?? now
             var phaseStart = entry.date
             for (number, phase) in zip(1..., schedulePhases) {
                 if number > 1 {
@@ -115,6 +115,18 @@ struct Night: Identifiable {
             }
         }
         return timeline.sorted { $0.date < $1.date }
+    }
+
+    /// How long the schedule that begins `played` is known to have run: until whatever ended it, other than a change
+    /// of air, or nil while nothing has. An end seen only when Lull reopened, an off or an early stop, is dated then,
+    /// but the BedJet stopped some time before, after the last thing Lull saw happen. So the schedule is only known
+    /// to have run until that, and no phase is listed past it.
+    private static func knownEnd(of played: ArraySlice<HistoryEntry>) -> Date? {
+        guard let start = played.first,
+              let end = played.dropFirst().firstIndex(where: { if case .air = $0.event { false } else { true } })
+        else { return nil }
+        guard played[end].noticedLater else { return played[end].date }
+        return played[..<end].last { !$0.noticedLater }?.date ?? start.date
     }
 
     /// The stretch of a schedule between two times, idle once the schedule is over.

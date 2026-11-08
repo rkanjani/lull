@@ -58,6 +58,22 @@ final class HistoryTests: XCTestCase {
         XCTAssertEqual(timeline.last, finished)
     }
 
+    func testStopsAtTheLastThingSeenWhenTheEndIsNoticedLater() throws {
+        // Lull saw a change of air at 1 a.m. and was closed. The BedJet stopped some time after, and Lull only saw
+        // that when it reopened at 5:50 a.m., past the start of phase 4.
+        let tweak = HistoryEntry(date: at(150), event: .air(mode: .cool, temperature: 44, fanPercent: 70))
+        let stoppedEarly = HistoryEntry(date: at(440), event: .scheduleEnded(name: schedule.name, ending: .early(minutes: 25)), noticedLater: true)
+        XCTAssertEqual(phaseNumbers(try night([started, tweak, stoppedEarly]).timeline(until: at(445))), [2])
+
+        // A change of air seen on reopening is dated then too, so it doesn't count as seeing the BedJet still running.
+        let changedMeanwhile = HistoryEntry(date: at(440), event: .air(mode: .heat, temperature: 70, fanPercent: 30), noticedLater: true)
+        let turnedOff = HistoryEntry(date: at(441), event: .off(timerRanOut: false), noticedLater: true)
+        XCTAssertEqual(phaseNumbers(try night([started, tweak, changedMeanwhile, turnedOff]).timeline(until: at(445))), [2])
+
+        // Closed all night: nothing says how far the schedule got.
+        XCTAssertEqual(phaseNumbers(try night([started, stoppedEarly]).timeline(until: at(445))), [])
+    }
+
     func testAChangeOfAirLeavesTheScheduleRunning() throws {
         let tweak = HistoryEntry(date: at(100), event: .air(mode: .cool, temperature: 44, fanPercent: 70))
         let timeline = try night([started, tweak]).timeline(until: at(445))
@@ -70,6 +86,22 @@ final class HistoryTests: XCTestCase {
         let ids = tonight.timeline(until: at(445)).map(\.id)
         XCTAssertEqual(tonight.timeline(until: at(445)).map(\.id), ids)
         XCTAssertEqual(Set(ids).count, 4)
+    }
+
+    func testNightsSavedBeforePhaseRowsStillLoad() throws {
+        // A schedule of two phases and an off 100 minutes in, as Lull saved them before phase rows existed.
+        let saved = """
+        [{"id":"0C6E4C1A-5B1F-4C55-9E55-7A1C0D2F3B01","date":782778600,"room":44,"noticedLater":false,
+          "event":{"scheduleStarted":{"name":"Cool Drift","phases":[
+            {"id":"0C6E4C1A-5B1F-4C55-9E55-7A1C0D2F3B02","mode":4,"temperature":44,"fanPercent":60,"minutes":45},
+            {"id":"0C6E4C1A-5B1F-4C55-9E55-7A1C0D2F3B03","mode":4,"temperature":44,"fanPercent":30,"minutes":300}]}}},
+         {"id":"0C6E4C1A-5B1F-4C55-9E55-7A1C0D2F3B04","date":782784600,"noticedLater":false,"event":{"off":{"timerRanOut":false}}}]
+        """
+        let entries = try JSONDecoder().decode([HistoryEntry].self, from: Data(saved.utf8))
+        let lastNight = Night(id: "saved", evening: entries[0].date, entries: entries)
+        let timeline = lastNight.timeline(until: entries[0].date.addingTimeInterval(600 * 60))
+        XCTAssertEqual(timeline.map(\.date), [entries[0].date, entries[0].date.addingTimeInterval(45 * 60), entries[1].date])
+        XCTAssertEqual(phaseNumbers(timeline), [2])
     }
 
     func testScheduleFromAnotherPhoneHasNoPhases() throws {
