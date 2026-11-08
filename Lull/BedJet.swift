@@ -521,6 +521,54 @@ final class BedJet: Identifiable {
         try? (existing + Date().formatted(date: .omitted, time: .standard) + " " + line).write(to: file, atomically: true, encoding: .utf8)
     }
 
+    // MARK: From outside the app
+
+    /// How long a widget, control or Siri waits for the BedJet to connect by itself before leaving it to the person.
+    static var freeWait: TimeInterval = 15
+
+    /// Sets the BedJet to a Quick Remote button's preset, as choosing its mode, temperature, fan and time on the
+    /// Remote would. Only if it's free (`reachesIfFree`); otherwise Lull, open on the Remote, leaves it to the person.
+    func applyPreset(_ preset: RemotePreset) async {
+        // A widget can be set to anything, and Lull may have been opened by something else claiming to be one.
+        let preset = preset.clamped
+        guard await reachesIfFree() else { return }
+        // The Remote never offers a mode this kind of BedJet lacks, so a button set up for another kind does nothing.
+        // Known for certain now that it's connected.
+        guard preset.mode == .standby || generation.supports(preset.mode) else { return }
+        // Like choosing the mode on the Remote: a schedule this phone started on this BedJet ends.
+        await setMode(preset.mode)
+        guard preset.mode != .standby else { return }
+        // Each step only while the BedJet is still this phone's: one handed to another phone meanwhile isn't asked back.
+        if adjustsTemperature(preset.mode), isConnected { await setTemperature(preset.temperature) }
+        if preset.mode.usesFan, isConnected { await setFan(percent: preset.fanPercent) }
+        // Last: the mode, temperature and fan each stretch the timer to the longest the BedJet allows.
+        if isConnected { await setRuntime(minutes: preset.minutes) }
+    }
+
+    /// Starts tonight from outside the app, only if the BedJet is free (`reachesIfFree`). A night already under way,
+    /// from this phone or another, is left running and shown.
+    func startTonightIfFree() async {
+        guard run == nil, await reachesIfFree(), run == nil else { return }
+        await startTonight()
+    }
+
+    /// Whether a widget, control or Siri may set the BedJet. A tap on one is easily made by accident, on what the
+    /// widget last showed, perhaps hours ago, so it never asks another phone to hand the BedJet over, as a control in
+    /// Lull does: it waits for the BedJet to connect by itself and say what it's doing. One another phone has, or
+    /// running a schedule another phone started, is left as it is, shown in Lull for the person to decide.
+    private func reachesIfFree() async -> Bool {
+        let deadline = Date().addingTimeInterval(Self.freeWait)
+        while Date() < deadline, !Task.isCancelled {
+            guard linkState != .yielded else { return false }
+            // Only a report from this connection says what the BedJet is doing now.
+            if isConnected, let statusReceivedAt, statusReceivedAt > connectedAt {
+                return !isBusy && runningElsewhereStep == nil
+            }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        return false
+    }
+
     // MARK: History
 
     /// The settings worth remembering from a status report. The timer is carried along to tell when it ran out.

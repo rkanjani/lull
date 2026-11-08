@@ -272,6 +272,22 @@ class AppModel(
         for (bedJet in bedJets) bedJet.connect(asking = bedJet.id == selectedID)
     }
 
+    // From outside the app
+
+    /** A Quick Remote button: sets the BedJet it was set to, or the one on screen, to its preset, if that BedJet is free. */
+    suspend fun applyQuickRemote(preset: RemotePreset, to: String?) {
+        // From a widget set to one BedJet: that one, and none rather than another if Lull can't switch now.
+        if (to != null && !select(to)) return
+        bedJet?.applyPreset(preset)
+    }
+
+    /** Starts tonight from a widget, a tile or a shortcut: on the BedJet named, or the one on screen, if it's free. */
+    suspend fun startNight(on: String?) {
+        // Started from a widget showing one BedJet: that one, and none rather than another if Lull can't switch now.
+        if (on != null && !select(on)) return
+        bedJet?.startTonightIfFree()
+    }
+
     // Looking for BedJets
 
     /** Starts looking for BedJets nearby, while a picker is open. Looking never connects or changes anything. */

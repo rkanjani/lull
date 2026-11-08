@@ -70,29 +70,10 @@ struct RootView: View {
             selectedTab = tab
         case let .remote(preset, id):
             selectedTab = .remote
-            // From a widget set to one BedJet: that one, and none rather than another if Lull can't switch now.
-            if let id, !model.select(id) { return }
-            // Like choosing the mode on the Remote: a schedule running on this BedJet ends.
-            guard let bedJet = model.bedJet, !bedJet.isBusy else { return }
-            // A widget can be set to anything, and Lull may have been opened by something else claiming to be one.
-            let preset = preset.clamped
-            // The Remote never offers a mode this kind of BedJet lacks, so a button set up for another kind does nothing.
-            guard preset.mode == .standby || bedJet.generation.supports(preset.mode) else { return }
-            Task {
-                await bedJet.setMode(preset.mode)
-                guard preset.mode != .standby else { return }
-                if bedJet.adjustsTemperature(preset.mode) { await bedJet.setTemperature(preset.temperature) }
-                if preset.mode.usesFan { await bedJet.setFan(percent: preset.fanPercent) }
-                // Last: the mode, temperature and fan each stretch the timer to the longest the BedJet allows.
-                await bedJet.setRuntime(minutes: preset.minutes)
-            }
+            Task { await model.applyQuickRemote(preset, to: id) }
         case let .startNight(id):
             selectedTab = .schedule
-            // Started from a widget showing one BedJet: that one, and none rather than another if Lull can't switch now.
-            if let id, !model.select(id) { return }
-            // A night already under way, from this phone or another, is left running and shown.
-            guard let bedJet = model.bedJet, bedJet.run == nil, bedJet.runningElsewhereStep == nil, !bedJet.isBusy else { return }
-            Task { await bedJet.startTonight() }
+            Task { await model.startNight(on: id) }
         }
     }
 }

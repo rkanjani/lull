@@ -190,6 +190,22 @@ final class AppModel {
         for bedJet in bedJets { bedJet.connect(asking: bedJet.id == selectedID) }
     }
 
+    // MARK: From outside the app
+
+    /// A Quick Remote button: sets the BedJet it was set to, or the one on screen, to its preset, if that BedJet is free.
+    func applyQuickRemote(_ preset: RemotePreset, to id: BedJet.ID?) async {
+        // From a widget set to one BedJet: that one, and none rather than another if Lull can't switch now.
+        if let id, !select(id) { return }
+        await bedJet?.applyPreset(preset)
+    }
+
+    /// Starts tonight from a widget, a control, Siri or Shortcuts: on the BedJet named, or the one on screen, if it's free.
+    func startNight(on id: BedJet.ID?) async {
+        // Started from a widget showing one BedJet: that one, and none rather than another if Lull can't switch now.
+        if let id, !select(id) { return }
+        await bedJet?.startTonightIfFree()
+    }
+
     // MARK: Looking for BedJets
 
     /// Starts looking for BedJets nearby, while a picker is open. Looking never connects or changes anything.

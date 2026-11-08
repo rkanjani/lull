@@ -605,6 +605,58 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         File(app.getApplication<android.app.Application>().filesDir, "connections.txt").appendText("$stamp $line")
     }
 
+    // From outside the app
+
+    /**
+     * Sets the BedJet to a Quick Remote button's preset, as choosing its mode, temperature, fan and time on the
+     * Remote would. Only if it's free ([reachesIfFree]); otherwise Lull, open on the Remote, leaves it to the person.
+     */
+    suspend fun applyPreset(preset: RemotePreset) {
+        // A widget can be set to anything, and Lull may have been opened by something else claiming to be one.
+        val clamped = preset.clamped
+        if (!reachesIfFree()) return
+        // The Remote never offers a mode this kind of BedJet lacks, so a button set up for another kind does nothing.
+        // Known for certain now that it's connected.
+        if (clamped.mode != Mode.STANDBY && !generation.supports(clamped.mode)) return
+        // Like choosing the mode on the Remote: a schedule this phone started on this BedJet ends.
+        setMode(clamped.mode)
+        if (clamped.mode == Mode.STANDBY) return
+        // Each step only while the BedJet is still this phone's: one handed to another phone meanwhile isn't asked back.
+        if (adjustsTemperature(clamped.mode) && isConnected) setTemperature(clamped.temperature)
+        if (clamped.mode.usesFan && isConnected) setFan(clamped.fanPercent)
+        // Last: the mode, temperature and fan each stretch the timer to the longest the BedJet allows.
+        if (isConnected) setRuntime(clamped.minutes)
+    }
+
+    /**
+     * Starts tonight from outside the app, only if the BedJet is free ([reachesIfFree]). A night already under way,
+     * from this phone or another, is left running and shown.
+     */
+    suspend fun startTonightIfFree() {
+        if (run != null || !reachesIfFree() || run != null) return
+        startTonight()
+    }
+
+    /**
+     * Whether a widget, tile or shortcut may set the BedJet. A tap on one is easily made by accident, on what the
+     * widget last showed, perhaps hours ago, so it never asks another phone to hand the BedJet over, as a control in
+     * Lull does: it waits for the BedJet to connect by itself and say what it's doing. One another phone has, or
+     * running a schedule another phone started, is left as it is, shown in Lull for the person to decide.
+     */
+    private suspend fun reachesIfFree(): Boolean {
+        val deadline = System.currentTimeMillis() + freeWait
+        while (System.currentTimeMillis() < deadline) {
+            if (linkState == LinkState.YIELDED) return false
+            // Only a report from this connection says what the BedJet is doing now.
+            val statusReceivedAt = statusReceivedAt
+            if (isConnected && statusReceivedAt != null && statusReceivedAt > connectedAt) {
+                return !isBusy && runningElsewhereStep == null
+            }
+            delay(50)
+        }
+        return false
+    }
+
     // History
 
     /** The settings worth remembering from a status report. The timer is carried along to tell when it ran out. */
@@ -759,5 +811,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     companion object {
         /** How long after Off a report saying the BedJet is still running is taken to have been sent before it. */
         var staleReportWindow = 2_000L
+        /** How long a widget, tile or shortcut waits for the BedJet to connect by itself before leaving it to the person. */
+        var freeWait = 15_000L
     }
 }

@@ -80,7 +80,6 @@ import com.rohankanjani.lull.AppModel
 import com.rohankanjani.lull.LullTab
 import com.rohankanjani.lull.BedJet
 import com.rohankanjani.lull.bedjetkit.LinkState
-import com.rohankanjani.lull.bedjetkit.Mode
 import kotlinx.coroutines.launch
 
 /** The BedJet every screen shows and controls, like iOS's `@Environment(BedJet.self)`. */
@@ -101,36 +100,11 @@ fun RootScreen(model: AppModel) {
                 }
                 is AppCommands.Command.Remote -> {
                     selectedTab = LullTab.REMOTE.ordinal
-                    // From a widget set to one BedJet: that one, and none rather than another if Lull can't switch now.
-                    val named = command.bedJet
-                    // Like choosing the mode on the Remote: a schedule running on this BedJet ends.
-                    val shown = if (named == null || model.select(named)) model.bedJet else null
-                    // A widget can be set to anything, and Lull may have been opened by something else claiming to be one.
-                    val preset = command.preset.clamped
-                    // The Remote never offers a mode this kind of BedJet lacks, so a button set up for another kind does nothing.
-                    val supported = preset.mode == Mode.STANDBY || shown?.generation?.supports(preset.mode) == true
-                    if (shown != null && !shown.isBusy && supported) {
-                        model.scope.launch {
-                            shown.setMode(preset.mode)
-                            if (preset.mode == Mode.STANDBY) return@launch
-                            if (shown.adjustsTemperature(preset.mode)) shown.setTemperature(preset.temperature)
-                            if (preset.mode.usesFan) shown.setFan(preset.fanPercent)
-                            // Last: the mode, temperature and fan each stretch the timer to the longest the BedJet allows.
-                            shown.setRuntime(preset.minutes)
-                        }
-                    }
+                    model.scope.launch { model.applyQuickRemote(command.preset, to = command.bedJet) }
                 }
                 is AppCommands.Command.StartNight -> {
                     selectedTab = LullTab.SCHEDULE.ordinal
-                    // Started from a widget showing one BedJet: that one, and none rather than another if Lull can't switch now.
-                    val named = command.bedJet
-                    if (named == null || model.select(named)) {
-                        // A night already under way, from this phone or another, is left running and shown.
-                        val shown = model.bedJet
-                        if (shown != null && shown.run == null && shown.runningElsewhereStep == null && !shown.isBusy) {
-                            model.scope.launch { shown.startTonight() }
-                        }
-                    }
+                    model.scope.launch { model.startNight(on = command.bedJet) }
                 }
             }
         }
