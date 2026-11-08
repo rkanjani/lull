@@ -381,4 +381,17 @@ class WidgetTest {
         assertEquals(Mode.HEAT.temperatureRange.first, mistyped.preset(fahrenheit = true).temperature)
         assertEquals(Mode.HEAT.temperatureRange.last, mistyped.preset(fahrenheit = false).temperature)
     }
+
+    @Test
+    fun quickRemoteNamesItsBedJetOnlyWithSeveral() {
+        // With two, the BedJet its buttons set, by name; one forgotten since says so, as its buttons do nothing.
+        assertEquals("Other side", bothSides().remoteHeading(theirs))
+        assertEquals("My side", bothSides().remoteHeading(null))
+        assertEquals("Forgotten BedJet", bothSides().remoteHeading("forgotten"))
+        // With one, there's nothing to tell apart, as on the Tonight widget.
+        val one = bothSides().let { it.copy(bedJets = it.bedJets.take(1)) }
+        assertEquals("BedJet Remote", one.remoteHeading(null))
+        assertEquals("BedJet Remote", one.remoteHeading(mine))
+        assertEquals("BedJet Remote", WidgetSnapshot().remoteHeading(null))
+    }
 }

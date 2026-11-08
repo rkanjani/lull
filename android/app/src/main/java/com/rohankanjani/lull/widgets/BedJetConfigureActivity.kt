@@ -57,7 +57,8 @@ import kotlinx.coroutines.launch
  * Picks which BedJet a Tonight or Last Night widget shows, or which two a Both Sides widget shows, by name, as
  * the iPhone's widgets do when edited, so a widget by each side of the bed shows its own side. Listed from what the app
  * last handed the widgets. A new widget starts on the BedJet on screen in Lull (Both Sides with it on the left), and when
- * Lull knows one BedJet or none, there's nothing to pick, so it's set up without asking.
+ * Lull knows one BedJet or none, there's nothing to pick, so it's set up without asking. It then shows the BedJet on
+ * screen, like an iPhone's widget not yet edited, so it carries on if that BedJet is replaced by a new one.
  */
 class BedJetConfigureActivity : ComponentActivity() {
     private val widgetId by lazy {
@@ -82,9 +83,9 @@ class BedJetConfigureActivity : ComponentActivity() {
                     if (left != null) state[PickedLeft] = left
                     if (right != null) state[PickedRight] = right
                 }
-                // With two, which goes on the left is still a choice.
+                // With two, which goes on the left is still a choice; with one, nothing is set.
                 if (snapshot.bedJets.size <= 1 && state[PickedLeft] == null) {
-                    save(widget, glanceId) { pick(it, left?.id, right?.id) }
+                    save(widget, glanceId) {}
                 } else {
                     setContent {
                         LullTheme {
@@ -95,7 +96,7 @@ class BedJetConfigureActivity : ComponentActivity() {
             } else {
                 val selected = state[PickedBedJet] ?: snapshot.usualBedJet?.id
                 if (snapshot.bedJets.size <= 1 && state[PickedBedJet] == null) {
-                    save(widget, glanceId) { if (selected != null) it[PickedBedJet] = selected }
+                    save(widget, glanceId) {}
                 } else {
                     setContent { LullTheme { BedJetPicker(snapshot.bedJets, selected) { id -> save(widget, glanceId) { it[PickedBedJet] = id } } } }
                 }

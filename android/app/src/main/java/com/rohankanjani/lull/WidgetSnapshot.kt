@@ -58,6 +58,16 @@ data class WidgetSnapshot(
     /** The name a widget heads itself with once Lull knows more than one BedJet, as the Tonight widget does. Null with one. */
     val headingName: String? get() = if (hasSeveralBedJets) bedJet(null)?.name else null
 
+    /**
+     * What a Quick Remote widget heads its buttons with while its BedJet isn't running: the BedJet's name once there's
+     * more than one to tell apart, as on the Tonight widget, or "Forgotten BedJet" for one forgotten since, whose buttons
+     * do nothing. Null is the one on screen.
+     */
+    fun remoteHeading(id: String?): String {
+        val bedJet = bedJet(id) ?: return if (id == null) "BedJet Remote" else "Forgotten BedJet"
+        return if (hasSeveralBedJets) bedJet.name else "BedJet Remote"
+    }
+
     /** A widget's heading, after the BedJet's name once there's more than one: "My side · Tonight". */
     fun headed(heading: String): String = headingName?.let { "$it · $heading" } ?: heading
 

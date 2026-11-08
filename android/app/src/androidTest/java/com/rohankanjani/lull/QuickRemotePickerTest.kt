@@ -37,6 +37,7 @@ import com.rohankanjani.lull.widgets.QuickRemoteWidgetReceiver
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -111,6 +112,20 @@ class QuickRemotePickerTest {
         assertEquals(listOf(PresetChoice(Mode.DRY, 30)) + PresetChoice.defaults.drop(1), chosen(widgetId))
         assertEquals("right", chosenBedJet(widgetId))
 
+    }
+
+    @Test
+    fun withOneBedJetThereIsNoBedJetToPick() {
+        WidgetSnapshot(bedJets = bedJets.take(1), onScreen = "left").save(context)
+        val widgetId = quickRemoteWidget()
+        ActivityScenario.launchActivityForResult<QuickRemoteConfigureActivity>(configure(widgetId)).use {
+            compose.waitFor(hasText("Buttons"))
+            compose.onNodeWithText("Left side").assertDoesNotExist()
+            compose.onNodeWithText("Save").performScrollTo().performClick()
+            assertEquals(Activity.RESULT_OK, it.result.resultCode)
+        }
+        // Nothing is set, so like an iPhone's widget not yet edited, the buttons set the BedJet on screen, even a new one.
+        assertNull(chosenBedJet(widgetId))
     }
 
     @Test

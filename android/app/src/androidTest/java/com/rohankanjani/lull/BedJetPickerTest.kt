@@ -38,6 +38,7 @@ import com.rohankanjani.lull.widgets.TonightWidgetReceiver
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -95,9 +96,14 @@ class BedJetPickerTest {
     @Test
     fun withOneBedJetThereIsNothingToPick() {
         WidgetSnapshot(bedJets = bedJets.take(1), onScreen = "left").save(context)
+        // Nothing is set, so like an iPhone's widget not yet edited, it shows the BedJet on screen, even a new one.
         val widgetId = place(TonightWidgetReceiver::class)
         assertEquals(Activity.RESULT_OK, configure(widgetId) {})
-        assertEquals("left", state(widgetId)[PickedBedJet])
+        assertNull(state(widgetId)[PickedBedJet])
+        val bothSides = place(BothSidesWidgetReceiver::class)
+        assertEquals(Activity.RESULT_OK, configure(bothSides) {})
+        assertNull(state(bothSides)[PickedLeft])
+        assertNull(state(bothSides)[PickedRight])
     }
 
     @Test

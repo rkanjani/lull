@@ -69,6 +69,14 @@ struct WidgetSnapshot: Codable, Equatable {
         hasSeveralBedJets ? bedJet(nil)?.name : nil
     }
 
+    /// What a Quick Remote widget heads its buttons with while its BedJet isn't running: the BedJet's name once there's
+    /// more than one to tell apart, as on the Tonight widget, or "Forgotten BedJet" for one forgotten since, whose buttons
+    /// do nothing. Nil is the one on screen.
+    func remoteHeading(for id: UUID?) -> String {
+        guard let bedJet = bedJet(id) else { return id == nil ? "BedJet Remote" : "Forgotten BedJet" }
+        return hasSeveralBedJets ? bedJet.name : "BedJet Remote"
+    }
+
     /// A widget's heading, after the BedJet's name once there's more than one: "My side · Tonight".
     func headed(_ heading: String) -> String {
         headingName.map { "\($0) · \(heading)" } ?? heading

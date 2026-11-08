@@ -121,8 +121,7 @@ private fun Status(snapshot: WidgetSnapshot, bedJetId: String?, now: Long, isMed
     val bedJet = snapshot.bedJet(bedJetId)
     val live = bedJet?.live(now)
     if (live == null) {
-        // A widget set to a BedJet that has since been forgotten says so; its buttons do nothing.
-        WidgetEyebrow(bedJet?.name ?: if (bedJetId == null) "BedJet Remote" else "Forgotten BedJet")
+        WidgetEyebrow(snapshot.remoteHeading(bedJetId))
         return
     }
     if (snapshot.hasSeveralBedJets) {

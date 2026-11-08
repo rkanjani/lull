@@ -85,8 +85,11 @@ class QuickRemoteConfigureActivity : ComponentActivity() {
             val state = QuickRemoteWidget().getAppWidgetState<Preferences>(this@QuickRemoteConfigureActivity, glanceId)
             val choices = QuickRemoteWidget.choices(state[QuickRemoteWidget.PRESETS])
             val snapshot = WidgetSnapshot.load(this@QuickRemoteConfigureActivity)
-            val bedJet = state[PickedBedJet] ?: snapshot?.usualBedJet?.id
-            setContent { LullTheme { QuickRemoteEditor(snapshot?.bedJets.orEmpty(), bedJet, choices, fahrenheit, ::save) } }
+            // With one BedJet or none there's nothing to pick, and the buttons set the one on screen, as an iPhone's do
+            // until it's edited, so they carry on if that BedJet is replaced by a new one.
+            val bedJets = snapshot?.bedJets.orEmpty()
+            val bedJet = state[PickedBedJet] ?: snapshot?.usualBedJet?.id?.takeIf { bedJets.size > 1 }
+            setContent { LullTheme { QuickRemoteEditor(bedJets, bedJet, choices, fahrenheit, ::save) } }
         }
     }
 
@@ -107,8 +110,8 @@ class QuickRemoteConfigureActivity : ComponentActivity() {
 }
 
 /**
- * The BedJet the buttons set, by name, the three buttons, each a mode with its time, temperature and fan, and Save. A
- * null BedJet happens only before Lull knows one, when the buttons set the one on screen.
+ * The BedJet the buttons set, by name, the three buttons, each a mode with its time, temperature and fan, and Save. The
+ * BedJet is only chosen once Lull knows more than one, or one was chosen before; a null BedJet sets the one on screen.
  */
 @Composable
 internal fun QuickRemoteEditor(
@@ -131,8 +134,10 @@ internal fun QuickRemoteEditor(
         ) {
             Text("Buttons", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { heading() })
             Text("What each button sets your BedJet to.", color = Theme.secondary)
-            Card(padding = 18.dp) {
-                BedJetChooser("BedJet", bedJets, bedJetId) { bedJetId = it }
+            if (bedJets.size > 1 || initialBedJet != null) {
+                Card(padding = 18.dp) {
+                    BedJetChooser("BedJet", bedJets, bedJetId) { bedJetId = it }
+                }
             }
             choices.forEachIndexed { index, choice ->
                 Card(padding = 18.dp) {

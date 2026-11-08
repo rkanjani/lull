@@ -356,4 +356,17 @@ final class WidgetTests: XCTestCase {
         XCTAssertEqual(mistyped.preset(fahrenheit: true).temperature, Mode.heat.temperatureRange.lowerBound)
         XCTAssertEqual(mistyped.preset(fahrenheit: false).temperature, Mode.heat.temperatureRange.upperBound)
     }
+
+    func testQuickRemoteNamesItsBedJetOnlyWithSeveral() {
+        // With two, the BedJet its buttons set, by name; one forgotten since says so, as its buttons do nothing.
+        XCTAssertEqual(bothSides().remoteHeading(for: theirs), "Other side")
+        XCTAssertEqual(bothSides().remoteHeading(for: nil), "My side")
+        XCTAssertEqual(bothSides().remoteHeading(for: UUID()), "Forgotten BedJet")
+        // With one, there's nothing to tell apart, as on the Tonight widget.
+        var one = bothSides()
+        one.bedJets = [one.bedJets[0]]
+        XCTAssertEqual(one.remoteHeading(for: nil), "BedJet Remote")
+        XCTAssertEqual(one.remoteHeading(for: mine), "BedJet Remote")
+        XCTAssertEqual(WidgetSnapshot().remoteHeading(for: nil), "BedJet Remote")
+    }
 }

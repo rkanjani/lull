@@ -99,8 +99,7 @@ struct QuickRemoteView: View {
                 }
             }
         } else {
-            // A widget set to a BedJet that has since been forgotten says so; its buttons do nothing.
-            WidgetEyebrow(bedJet?.name ?? (entry.bedJet == nil ? "BedJet Remote" : "Forgotten BedJet"))
+            WidgetEyebrow(entry.snapshot.remoteHeading(for: entry.bedJet?.id))
         }
     }
 
