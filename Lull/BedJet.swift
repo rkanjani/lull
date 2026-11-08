@@ -128,6 +128,8 @@ final class BedJet: Identifiable {
     private var wifiPhaseSince = Date.distantPast
     /// The BedJet reported it's restarting to install firmware, and hasn't restarted since.
     private var restartsToInstall = false
+    /// The connection the BedJet began installing firmware on, which ends with its restart.
+    private var installBeganOn = Date.distantPast
 
     var saved: SavedBedJet {
         SavedBedJet(id: id, unit: unit, name: name, nickname: nickname, generation: knownGeneration, tonightID: tonightID, run: run, slot: slot,
@@ -255,14 +257,17 @@ final class BedJet: Identifiable {
         app?.save()
         logConnection()
         // Phones take turns with the BedJet, so reconnecting is routine; what is saved on it
-        // only needs re-reading now and then.
-        guard Date().timeIntervalSince(lastRefresh) > 300 else { return }
+        // only needs re-reading now and then, or once it's back from restarting into new firmware.
+        guard Date().timeIntervalSince(lastRefresh) > 300 || wifiActivity?.awaitsRestart == true else { return }
         Task {
             // Anything the person tapped while connecting goes first.
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             // Setting the clock is a command, so it waits while the BedJet uses its Wi-Fi.
-            while (isBusy || reportsWiFiUnderWay) && link.state == .ready { try? await Task.sleep(nanoseconds: 200_000_000) }
-            guard link.state == .ready else { return }
+            while (isBusy || reportsWiFiUnderWay || wifiActivity?.isRunning == true) && link.state == .ready {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            // Still on the connection the install began on, so the version is read once it's back from restarting.
+            guard link.state == .ready, wifiActivity?.awaitsRestart != true || connectedAt != installBeganOn else { return }
             do {
                 try await link.syncClock()
                 name = try await link.deviceName()
@@ -613,12 +618,15 @@ final class BedJet: Identifiable {
         // Asked once a launch: whether this works or not, the update waits in the BedJet sheet from now on.
         firmwareUpdateDeferred = true
         await useWiFi(.updating, offered: offered) { link, progress in
+            // Known before asking, even when this comes straight after connecting, to tell newer firmware once it's back.
+            if self.firmware == nil { self.firmware = try? await link.firmwareVersion() }
             switch try await link.updateFirmware(progress: progress) {
             case .upToDate:
                 return "Your BedJet's firmware is up to date."
             case .installing:
                 // Read again once it's back, to show the new version.
                 self.lastRefresh = .distantPast
+                self.installBeganOn = self.connectedAt
                 self.wifiActivity?.awaitsRestart = true
                 self.stopExpectingRestartLater()
                 return "Your BedJet is installing the update and restarts when it's done. Keep it plugged in."

@@ -194,6 +194,8 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     private var wifiPhaseSince = 0L
     /** The BedJet reported it's restarting to install firmware, and hasn't restarted since. */
     private var restartsToInstall by mutableStateOf(false)
+    /** The connection the BedJet began installing firmware on, which ends with its restart. */
+    private var installBeganOn = 0L
 
     val saved: SavedBedJet
         get() = SavedBedJet(id, unit, name, nickname, knownGeneration, tonightID, run, slot, longestEnds, timerEnds, wifiNetwork)
@@ -311,14 +313,16 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         app.save()
         logConnection()
         // Phones take turns with the BedJet, so reconnecting is routine; what is saved on it
-        // only needs re-reading now and then.
-        if (System.currentTimeMillis() - lastRefresh <= 300_000) return
+        // only needs re-reading now and then, or once it's back from restarting into new firmware.
+        if (System.currentTimeMillis() - lastRefresh <= 300_000 && wifiActivity?.awaitsRestart != true) return
         app.scope.launch {
             // Anything the person tapped while connecting goes first.
             delay(1200)
             // Setting the clock is a command, so it waits while the BedJet uses its Wi-Fi.
-            while ((isBusy || reportsWiFiUnderWay) && link.state == LinkState.READY) delay(200)
+            while ((isBusy || reportsWiFiUnderWay || wifiActivity?.isRunning == true) && link.state == LinkState.READY) delay(200)
             if (link.state != LinkState.READY) return@launch
+            // Still on the connection the install began on, so the version is read once it's back from restarting.
+            if (wifiActivity?.awaitsRestart == true && connectedAt == installBeganOn) return@launch
             try {
                 link.syncClock()
                 name = link.deviceName()
@@ -695,11 +699,14 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         // Asked once a launch: whether this works or not, the update waits in the BedJet sheet from now on.
         firmwareUpdateDeferred = true
         useWiFi(WiFiActivity.Purpose.UPDATING, offered) { link, progress ->
+            // Known before asking, even when this comes straight after connecting, to tell newer firmware once it's back.
+            if (firmware == null) attempt { firmware = link.firmwareVersion() }
             when (val found = link.updateFirmware(progress)) {
                 FirmwareUpdate.UpToDate -> "Your BedJet's firmware is up to date."
                 FirmwareUpdate.Installing -> {
                     // Read again once it's back, to show the new version.
                     lastRefresh = 0
+                    installBeganOn = connectedAt
                     wifiActivity = wifiActivity?.copy(awaitsRestart = true)
                     stopExpectingRestartLater()
                     "Your BedJet is installing the update and restarts when it's done. Keep it plugged in."

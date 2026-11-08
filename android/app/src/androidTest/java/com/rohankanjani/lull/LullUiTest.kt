@@ -312,9 +312,10 @@ class LullUiTest {
         compose.onNodeWithText("Not Now").performClick()
         compose.onNode(pill("BEDJET-DEMO")).performClick()
         compose.waitFor(hasText("Done"))
-        compose.onNodeWithText("Update Firmware").performScrollTo().assertIsEnabled()
+        val update = compose.onNodeWithText("Update Firmware").performScrollTo().assertIsEnabled()
         compose.capture("firmware-update-sheet")
-        compose.onNodeWithText("Update Firmware").performClick()
+        // Tapped through its click action: a tap by position can land while the sheet is still sliding up.
+        update.performSemanticsAction(SemanticsActions.OnClick)
         compose.waitFor(hasText("Update your BedJet's firmware?"))
         compose.onNodeWithText("Update").performClick()
         // Asked for from the sheet, how it went is said there, and the offer isn't made again.
