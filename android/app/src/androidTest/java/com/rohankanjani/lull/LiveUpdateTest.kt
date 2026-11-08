@@ -3,6 +3,7 @@ package com.rohankanjani.lull
 import android.Manifest
 import android.app.Notification
 import android.app.NotificationManager
+import android.os.Build
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isEnabled
@@ -80,7 +81,10 @@ class LiveUpdateTest {
         // Titled with tonight's schedule, with its phases along a progress bar.
         compose.waitUntil(10_000) { liveUpdate()?.text?.contains("Ends") == true }
         val night = liveUpdate()!!
-        assertEquals(Notification.ProgressStyle::class.java.name, night.extras.getString(Notification.EXTRA_TEMPLATE))
+        // The phases' progress bar is Android 16's; before it, the same ongoing notification shows without one.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+            assertEquals(Notification.ProgressStyle::class.java.name, night.extras.getString(Notification.EXTRA_TEMPLATE))
+        }
 
         compose.onNodeWithText("End Night").performClick()
         compose.waitUntil(10_000) { liveUpdate() == null }
