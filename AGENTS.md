@@ -58,6 +58,7 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | Start Night and Remote controls | `LullWidgets/Controls.swift` | `android/app/.../widgets/Tiles.kt` (Quick Settings tiles and app shortcuts) |
 | Protocol tests | `BedJetKit/Tests/BedJetKitTests/CodecTests.swift`, `CodecV2Tests.swift`, `DiscoveryTests.swift` | `android/bedjetkit/src/test/.../CodecTest.kt`, `CodecV2Test.kt`, `DiscoveryTest.kt` |
 | App logic tests | | `android/app/src/test/.../ScheduleTest.kt` |
+| History tests | `LullTests/HistoryTests.swift` | `android/app/src/test/.../HistoryTest.kt` |
 | Choosing, switching and forgetting BedJets | `LullTests/DeviceSelectionTests.swift` | `android/app/src/androidTest/.../DeviceSelectionTest.kt` (on a device, since the model needs Android) |
 | Widget tests | `LullTests/WidgetTests.swift` | `android/app/src/test/.../WidgetTest.kt` |
 | Widget UI tests | `LullUITests/HomeScreenWidgetTests.swift` | `android/app/src/androidTest/.../WidgetUiTest.kt` |
