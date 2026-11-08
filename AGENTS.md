@@ -51,7 +51,7 @@ protocol findings, copy, limits, defaults and tests. A change made only to one a
 | History tab | `Lull/Views/HistoryView.swift` | `android/app/.../ui/HistoryScreen.kt` |
 | Launch and lifecycle | `Lull/LullApp.swift` | `android/app/.../MainActivity.kt` |
 | What widgets are handed, and what each BedJet is doing | `Shared/WidgetSnapshot.swift`, `Shared/LiveStatus.swift` | `android/app/.../WidgetSnapshot.kt`, `LiveStatus.kt` |
-| Start Night and tab links from outside the app | `Shared/Intents.swift` | `android/app/.../Commands.kt` |
+| Start Night and tab links from outside the app | `Shared/Intents.swift` | `android/app/.../Commands.kt` (buttons open Lull through its unexported `CommandActivity`) |
 | Tonight widget | `LullWidgets/TonightWidget.swift` | `android/app/.../widgets/TonightWidget.kt` |
 | Last Night widget | `LullWidgets/LastNightWidget.swift` | `android/app/.../widgets/LastNightWidget.kt` |
 | Picking the BedJet a widget shows | `BedJetEntity`, `BedJetConfiguration` and `BothSidesConfiguration` in `Shared/Intents.swift` | `android/app/.../widgets/BedJetConfigureActivity.kt` |

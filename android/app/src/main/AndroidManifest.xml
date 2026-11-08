@@ -43,6 +43,13 @@
             </intent-filter>
         </activity>
 
+        <!-- Start Night and Quick Remote buttons on widgets, tiles and shortcuts open Lull through this, so no other
+             app can press them: it isn't exported. -->
+        <activity
+            android:name=".CommandActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.NoDisplay" />
+
         <!-- Home Screen widgets. Like the iPhone app's, they read what the app last saved. -->
         <receiver
             android:name=".widgets.TonightWidgetReceiver"

@@ -26,6 +26,8 @@ import com.rohankanjani.lull.widgets.TonightContent
 import com.rohankanjani.lull.widgets.TonightWidget
 import com.rohankanjani.lull.bedjetkit.Mode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -132,6 +134,15 @@ class WidgetUiTest {
             assertEquals(AppCommands.Command.Remote(preset), AppCommands.from(AppCommands.remoteIntent(context, preset)))
             assertEquals(AppCommands.Command.Remote(preset, "right"), AppCommands.from(AppCommands.remoteIntent(context, preset, "right")))
         }
+        // Only Lull's own buttons can press them: they go through a screen no other app can open, and Lull's main
+        // screen, which any app can, takes nothing but a tab from them.
+        val command = AppCommands.remoteIntent(context, RemotePreset.defaults[1])
+        assertEquals(CommandActivity::class.java.name, command.component?.className)
+        val info = context.packageManager.getActivityInfo(command.component!!, 0)
+        assertFalse(info.exported)
+        assertEquals(AppCommands.Command.Show(LullTab.REMOTE), AppCommands.shown(command))
+        assertEquals(CommandActivity::class.java.name, AppCommands.startNightIntent(context, "right").component?.className)
+        assertNull(AppCommands.shown(AppCommands.startNightIntent(context)))
         // Buttons set differently open Lull at different addresses, so Android keeps their taps apart.
         val links = RemotePreset.defaults.map { AppCommands.remoteIntent(context, it).dataString } +
             AppCommands.remoteIntent(context, RemotePreset.defaults[0], "right").dataString
@@ -189,8 +200,10 @@ class WidgetUiTest {
 
     @Test
     fun startNightFromATileOrShortcut() {
-        val intent = AppCommands.startNightIntent(ApplicationProvider.getApplicationContext()).putExtra("ephemeral", true)
-        ActivityScenario.launch<MainActivity>(intent).use {
+        val open = Intent(ApplicationProvider.getApplicationContext(), MainActivity::class.java).putExtra("ephemeral", true)
+        ActivityScenario.launch<MainActivity>(open).use { scenario ->
+            // The button goes through Lull's own screen for commands, which hands it to Lull.
+            scenario.onActivity { it.startActivity(AppCommands.startNightIntent(it)) }
             // Lull opens on the Schedule and starts tonight's schedule once the BedJet connects.
             compose.waitFor(hasText("End Night"), timeoutMillis = 15_000)
             compose.onNodeWithText("End Night").assertExists()

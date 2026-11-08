@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
     /** A widget, tile or shortcut opened Lull again while it was already running. */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        AppCommands.from(intent)?.let(AppCommands::send)
+        AppCommands.shown(intent)?.let(AppCommands::send)
     }
 
     private val model: AppModel by viewModels {
@@ -67,9 +67,9 @@ class MainActivity : ComponentActivity() {
         })
 
         publishShortcuts(this)
-        // Only when first opened: a recreated activity keeps the intent that opened it, and acting on it again would
-        // apply a Quick Remote preset or start a night nobody asked for this time.
-        if (savedInstanceState == null) AppCommands.from(intent)?.let(AppCommands::send)
+        // Only when first opened: a recreated activity keeps the intent that opened it, and showing its tab again would
+        // undo the tab chosen since.
+        if (savedInstanceState == null) AppCommands.shown(intent)?.let(AppCommands::send)
 
         setContent {
             val askForBluetooth = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
