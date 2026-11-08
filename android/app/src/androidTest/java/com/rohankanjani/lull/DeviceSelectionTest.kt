@@ -596,6 +596,78 @@ class DeviceSelectionTest {
         assertEquals(emptyList<List<Byte>>(), timerCommands(unit, after = sent))
         assertAbout(180 * 60, remainingSeconds(unit))
     }
+
+    @Test
+    fun aTimePickedWhileAnotherPhoneHandsTheBedJetOverWins() = onMain {
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        val unit = unit(mine.id)
+        // Cool is tapped, and a time picked while the BedJet is still taking it.
+        unit.holdsSends = true
+        val choosing = async { bedJet.setMode(Mode.COOL) }
+        waitUntil("Cool to be in flight") { unit.heldCount == 1 }
+        val picking = async { bedJet.setRuntime(180) }
+        waitUntil("the time to be in flight") { unit.heldCount == 2 }
+        unit.releaseFirst()
+        waitUntil("the BedJet to take Cool") { unit.lastStatus?.mode == Mode.COOL }
+        unit.release()
+        picking.await()
+        choosing.await()
+
+        assertAbout(180 * 60, remainingSeconds(unit))
+    }
+
+    @Test
+    fun heatStillGetsBackItsTimeWhenAChangeIsReplaced() = onMain {
+        // Heat at 40 °C with the gentlest fan was chosen on the Remote, and 150 of its 4 hours are left.
+        val unit = unit(mine.id)
+        unit.device.send(Codec.setMode(Mode.HEAT)!!)
+        unit.device.send(Codec.setTemperature(80))
+        unit.device.send(Codec.setFan(0))
+        unit.device.send(Codec.setRuntime(150))
+        val ends = System.currentTimeMillis() + 150 * 60_000L
+        val model = launch(longestEnds = ends, timerEnds = ends)
+        val bedJet = connected(mine, model)
+
+        // A stronger fan cuts Heat to 2 hours, and a newer slider move replaces it before Lull reads the timer back.
+        val stronger = async { bedJet.setFan(40) }
+        waitUntil("the stronger fan to be sent") { unit.sent.contains(Codec.setFan(7).toList()) }
+        stronger.cancel()
+        stronger.join()
+        assertAbout(120 * 60, remainingSeconds(unit))
+
+        val sent = unit.sent.size
+        bedJet.setFan(5)
+        assertEquals(listOf(Codec.setRuntime(150).toList()), timerCommands(unit, after = sent))
+        assertAbout(150 * 60, remainingSeconds(unit))
+    }
+
+    @Test
+    fun turningTheAirOffForgetsTheRemotesTimer() = onMain {
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        bedJet.setMode(Mode.COOL)
+        assertNotNull(bedJet.saved.longestEnds)
+
+        bedJet.setMode(Mode.STANDBY)
+        assertNull(bedJet.saved.longestEnds)
+        assertNull(bedJet.saved.timerEnds)
+    }
+
+    @Test
+    fun aDamagedSaveNeverSetsTheTimer() = onMain {
+        val unit = unit(mine.id)
+        unit.device.send(Codec.setMode(Mode.COOL)!!)
+        unit.device.send(Codec.setRuntime(675))
+        val model = launch(longestEnds = Long.MIN_VALUE, timerEnds = System.currentTimeMillis() + 675 * 60_000L)
+        val bedJet = connected(mine, model)
+
+        bedJet.setFan(50)
+        assertEquals(emptyList<List<Byte>>(), timerCommands(unit))
+        assertAbout(675 * 60, remainingSeconds(unit))
+    }
 }
 
 /**
@@ -616,6 +688,7 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
         private set
     private val held = mutableListOf<CompletableDeferred<Unit>>()
     val isHolding: Boolean get() = held.isNotEmpty()
+    val heldCount: Int get() = held.size
 
     override var onStateChange: ((LinkState) -> Unit)? = null
     override var onStatus: ((DeviceStatus) -> Unit)? = null
@@ -660,6 +733,12 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
         val waiting = held.toList()
         held.clear()
         for (continuation in waiting) continuation.complete(Unit)
+    }
+
+    /** Lets only the oldest command in flight through; the rest stay held. */
+    fun releaseFirst() {
+        if (held.isEmpty()) return
+        held.removeAt(0).complete(Unit)
     }
 
     /** A status report, however late it arrives. */
