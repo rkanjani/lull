@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature android:name="android.hardware.type.watch" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Lull"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.DeviceDefault">
+
+        <!-- Lull on the watch needs Lull on the phone, which reaches the BedJet. -->
+        <meta-data
+            android:name="com.google.android.wearable.standalone"
+            android:value="false" />
+
+        <!-- Exported, since the launcher and the tile open it. Start Night from the tile or a shortcut carries a secret
+             only Lull knows (StartNightToken), so no other app can press it. -->
+        <activity
+            android:name=".WearActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.DeviceDefault">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- What the phone sends: what the widgets show, and how an errand went. -->
+        <service
+            android:name=".WatchSessionService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data
+                    android:host="*"
+                    android:pathPrefix="/lull"
+                    android:scheme="wear" />
+            </intent-filter>
+        </service>
+
+        <!-- Tonight as a tile, the twin of the Apple Watch's Tonight complication and the phone's Start Night control. -->
+        <service
+            android:name=".TonightTile"
+            android:exported="true"
+            android:label="Tonight"
+            android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">
+            <intent-filter>
+                <action android:name="androidx.wear.tiles.action.BIND_TILE_PROVIDER" />
+            </intent-filter>
+            <meta-data
+                android:name="androidx.wear.tiles.PREVIEW"
+                android:resource="@drawable/ic_tile_night" />
+        </service>
+
+        <!-- Tonight on the watch face. Redrawn when the phone hands over something new, and every five minutes. -->
+        <service
+            android:name=".TonightComplicationService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_night"
+            android:label="Tonight"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SHORT_TEXT,LONG_TEXT,RANGED_VALUE" />
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="300" />
+        </service>
+    </application>
+</manifest>

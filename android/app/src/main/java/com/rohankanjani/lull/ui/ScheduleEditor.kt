@@ -27,16 +27,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TimePicker
-import androidx.compose.material3.TimePickerDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -45,7 +42,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -61,6 +57,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -82,11 +79,18 @@ import com.rohankanjani.lull.title
 @Composable
 fun ScheduleEditor(model: AppModel, initial: Schedule, onDismiss: () -> Unit) {
     val bedJet = LocalBedJet.current
-    var schedule by remember(initial.id) { mutableStateOf(initial) }
+    // With a wake time, opens on the night fitted to run from the usual bedtime to it, which one saved before Lull fitted it
+    // may not be.
+    var schedule by remember(initial.id) { mutableStateOf(initial.fitted()) }
     var selection by remember { mutableStateOf<String?>(null) }
     var picksBedtime by remember { mutableStateOf(false) }
+    var picksWakeTime by remember { mutableStateOf(false) }
+    /** A wake time set in this editor, kept while Bedtime is chosen so choosing Wake time again brings it back. */
+    var setWakeTime by remember { mutableStateOf<Int?>(null) }
     val focus = LocalFocusManager.current
     val isValid = schedule.name.isNotBlank() && schedule.phases.isNotEmpty()
+    // With a wake time the phases that stretch or shrink take up the time a removed one leaves.
+    val remove = { id: String -> schedule = schedule.copy(phases = schedule.phases.filter { it.id != id }).fitted() }
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Box(Modifier.fillMaxSize().background(Theme.background)) {
@@ -137,47 +141,36 @@ fun ScheduleEditor(model: AppModel, initial: Schedule, onDismiss: () -> Unit) {
                         NightTimeline(model, schedule, selection = selection, height = 170.dp)
                     }
 
-                    Card(padding = 16.dp) {
-                        val label = @Composable {
-                            Column(Modifier.semantics(mergeDescendants = true) {}, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                Text("Usual bedtime", fontSize = 17.sp, fontWeight = FontWeight.Medium)
-                                Text("Wake around ${Format.clock(schedule.bedtime + schedule.totalMinutes)}", fontSize = 13.sp, color = Theme.secondary)
+                    NightCard(
+                        schedule,
+                        onBedtime = { picksBedtime = true },
+                        onWakeTime = { picksWakeTime = true },
+                        onEndsAtWakeTime = { endsAtWakeTime ->
+                            // Choosing Bedtime keeps the wake time set here, so choosing Wake time again brings it back until
+                            // the schedule is saved or cancelled. A first one starts where the night ends now.
+                            if (endsAtWakeTime) {
+                                schedule = schedule.copy(wakeTime = setWakeTime ?: schedule.usualWakeTime).fitted()
+                            } else {
+                                setWakeTime = schedule.wakeTime
+                                schedule = schedule.copy(wakeTime = null)
                             }
-                        }
-                        val time = @Composable {
-                            Text(
-                                Format.clock(schedule.bedtime),
-                                fontSize = 17.sp,
-                                style = Theme.tabular,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Theme.raised)
-                                    .clickable(role = Role.Button, onClickLabel = "Change bedtime") { picksBedtime = true }
-                                    .semantics { contentDescription = "Bedtime, ${Format.clock(schedule.bedtime)}" }
-                                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                            )
-                        }
-                        // At the largest text sizes the time goes under its label rather than squeezing it into a sliver.
-                        if (isLargeText()) {
-                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                label()
-                                time()
-                            }
-                        } else {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.weight(1f)) { label() }
-                                time()
-                            }
-                        }
-                    }
+                        },
+                    )
 
-                    Eyebrow("Phases", Modifier.semantics { heading() })
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Eyebrow("Phases", Modifier.semantics { heading() })
+                        // What the lengths below mean, so it sits with them rather than with the night's times.
+                        Text(schedule.phasesCaption, fontSize = 13.sp, color = Theme.secondary)
+                    }
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        // Each phase starts where the one before it ends, from the usual bedtime: with a wake time, on a usual night.
                         schedule.phases.forEachIndexed { index, phase ->
                             PhaseRow(
-                                model, phase, number = index + 1, startsAt = schedule.startMinute(phase),
+                                model, phase, number = index + 1,
+                                startsAt = schedule.startMinute(phase),
+                                isFixed = schedule.wakeTime != null && phase.fixedLength,
                                 onDelete = if (schedule.phases.size > 1) {
-                                    { schedule = schedule.copy(phases = schedule.phases.filter { it.id != phase.id }) }
+                                    { remove(phase.id) }
                                 } else {
                                     null
                                 },
@@ -187,8 +180,9 @@ fun ScheduleEditor(model: AppModel, initial: Schedule, onDismiss: () -> Unit) {
                     if (schedule.phases.size < Limits.STEPS_PER_PROGRAM) {
                         PrimaryButton(
                             onClick = {
+                                // With a wake time it takes its hour from the phases that stretch or shrink, as far as they have it.
                                 val phase = Phase(Mode.COOL, fanPercent = 30, minutes = 60)
-                                schedule = schedule.copy(phases = schedule.phases + phase)
+                                schedule = schedule.copy(phases = schedule.phases + phase).fitted(holding = phase.id)
                                 selection = phase.id
                             },
                             prominent = false,
@@ -219,53 +213,65 @@ fun ScheduleEditor(model: AppModel, initial: Schedule, onDismiss: () -> Unit) {
                 PhaseEditor(
                     model,
                     phase = schedule.phases[index],
-                    onChange = { changed -> schedule = schedule.copy(phases = schedule.phases.toMutableList().also { it[index] = changed }) },
+                    // With a wake time the night still ends at it: the phase keeps the length it's given, and the phases that
+                    // stretch or shrink share the rest.
+                    onChange = { changed ->
+                        schedule = schedule.copy(phases = schedule.phases.toMutableList().also { it[index] = changed }).fitted(holding = changed.id)
+                    },
                     canDelete = schedule.phases.size > 1,
+                    durationSteps = schedule.durationSteps(schedule.phases[index]),
+                    scaling = schedule.scalingNote(schedule.phases[index]),
                     onDelete = {
                         selection = null
-                        schedule = schedule.copy(phases = schedule.phases.toMutableList().also { it.removeAt(index) })
+                        remove(schedule.phases[index].id)
                     },
                     onDismiss = { selection = null },
                 )
             }
             if (picksBedtime) {
-                BedtimePicker(schedule.bedtime, onPick = { schedule = schedule.copy(bedtime = it) }, onDismiss = { picksBedtime = false })
+                // The phases are fitted afresh to the night between the usual bedtime and the wake time when either changes.
+                TimeOfDayPicker("Usual bedtime", schedule.bedtime, onPick = { schedule = schedule.copy(bedtime = it).fitted() }, onDismiss = { picksBedtime = false })
+            }
+            schedule.wakeTime?.let { wakeTime ->
+                if (picksWakeTime) {
+                    TimeOfDayPicker("Wake time", wakeTime, onPick = { schedule = schedule.copy(wakeTime = it).fitted() }, onDismiss = { picksWakeTime = false })
+                }
             }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * When the night starts and ends. Without a wake time it runs from the usual bedtime for as long as its phases. With one
+ * the phases are fitted to run from the usual bedtime to the wake time, and stretch or shrink to end at it whenever Start
+ * Night is pressed.
+ */
 @Composable
-private fun BedtimePicker(minuteOfDay: Int, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
-    val state = rememberTimePickerState(minuteOfDay / 60, minuteOfDay % 60, is24Hour = Format.use24Hour)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Theme.raised,
-        title = { Text("Usual bedtime") },
-        text = {
-            TimePicker(
-                state,
-                colors = TimePickerDefaults.colors(
-                    clockDialColor = Theme.surface,
-                    selectorColor = Color.White,
-                    clockDialSelectedContentColor = Color.Black,
-                    timeSelectorSelectedContainerColor = Color.White,
-                    timeSelectorSelectedContentColor = Color.Black,
-                    timeSelectorUnselectedContainerColor = Theme.surface,
-                    periodSelectorSelectedContainerColor = Color.White,
-                    periodSelectorSelectedContentColor = Color.Black,
-                ),
-            )
-        },
-        confirmButton = {
-            TextButton({
-                onPick(state.hour * 60 + state.minute)
-                onDismiss()
-            }) { Text("Done") }
-        },
-        dismissButton = { TextButton(onDismiss) { Text("Cancel") } },
-    )
+private fun NightCard(
+    schedule: Schedule,
+    onBedtime: () -> Unit,
+    onWakeTime: () -> Unit,
+    onEndsAtWakeTime: (Boolean) -> Unit,
+) {
+    val wakeTime = schedule.wakeTime
+    Card(Modifier.animateContentSize(), padding = 16.dp) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text("Night", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Theme.secondary, modifier = Modifier.semantics { heading() })
+            // A wake time or the usual bedtime alone, chosen as the Remote chooses Timer or Time.
+            SegmentedChoice(listOf(true to "Wake time", false to "Bedtime"), wakeTime != null, onEndsAtWakeTime, Modifier.fillMaxWidth())
+            // The usual bedtime stays where it is, the wake time under it when there is one.
+            Column {
+                TimeRow("Usual bedtime") {
+                    TimeChip(schedule.bedtime, "Usual bedtime", "Change bedtime", onBedtime)
+                }
+                if (wakeTime != null) {
+                    TimeRow("Wake time") {
+                        TimeChip(wakeTime, "Wake time", "Change wake time", onWakeTime)
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -274,6 +280,8 @@ private fun PhaseRow(
     phase: Phase,
     number: Int,
     startsAt: Int,
+    /** Keeps its length while a wake time scales the rest of the night. */
+    isFixed: Boolean,
     /** Null when this is the only phase, which can't be removed. */
     onDelete: (() -> Unit)?,
     onClick: () -> Unit,
@@ -300,7 +308,10 @@ private fun PhaseRow(
     }
     val timing = @Composable {
         Column(horizontalAlignment = if (large) Alignment.Start else Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(Format.duration(phase.minutes), fontSize = 15.sp, fontWeight = FontWeight.Medium, style = Theme.tabular)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (isFixed) Icon(Icons.Filled.Lock, null, tint = Theme.secondary, modifier = Modifier.size(12.dp))
+                Text(Format.duration(phase.minutes), fontSize = 15.sp, fontWeight = FontWeight.Medium, style = Theme.tabular)
+            }
             Text(Format.clock(startsAt), fontSize = 13.sp, color = Theme.secondary, style = Theme.tabular)
         }
     }
@@ -312,7 +323,7 @@ private fun PhaseRow(
             .border(BorderStroke(1.dp, Theme.hairline), shape)
             .clickable(role = Role.Button, onClickLabel = "Edit this phase", onClick = onClick)
             .clearAndSetSemantics {
-                contentDescription = "Phase $number, ${model.spokenSummary(phase)}, starts ${Format.clock(startsAt)}"
+                contentDescription = "Phase $number, ${model.spokenSummary(phase)}${if (isFixed) ", fixed length" else ""}, starts ${Format.clock(startsAt)}"
                 role = Role.Button
                 onClick(label = "Edit this phase") { onClick(); true }
                 if (onDelete != null) customActions = listOf(CustomAccessibilityAction("Remove Phase") { onDelete(); true })
@@ -341,6 +352,13 @@ private fun PhaseEditor(
     phase: Phase,
     onChange: (Phase) -> Unit,
     canDelete: Boolean,
+    /**
+     * The lengths the Duration slider offers. Null when there's nothing to choose, as for the only phase that stretches or
+     * shrinks to fill the night.
+     */
+    durationSteps: IntRange?,
+    /** With a wake time, whether this phase stretches or shrinks with the night, or why the night can't. */
+    scaling: String?,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -351,8 +369,9 @@ private fun PhaseEditor(
         if (phase.minutes > phase.maxMinutes) onChange(phase.copy(minutes = phase.maxMinutes))
     }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet, containerColor = Theme.surface, dragHandle = null) {
+        // Scrolls once it's taller than the screen, as at the largest text sizes, as the iPhone's sheet does.
         Column(
-            Modifier.padding(24.dp).padding(top = 8.dp).navigationBarsPadding().animateContentSize(),
+            Modifier.verticalScroll(rememberScrollState()).padding(24.dp).padding(top = 8.dp).navigationBarsPadding().animateContentSize(),
             verticalArrangement = Arrangement.spacedBy(24.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -378,12 +397,26 @@ private fun PhaseEditor(
                     range = 5f..100f, step = 5f, tint = phase.mode.tint,
                 )
             }
-            LabeledSlider(
-                "Duration", Format.duration(phase.minutes), phase.minutes.toFloat(),
-                onValueChange = { onChange(phase.copy(minutes = it.toInt())) },
-                range = 5f..(phase.maxMinutes / 5 * 5).toFloat(), step = 5f,
-                spokenValue = Format.spokenDuration(phase.minutes),
-            )
+            if (durationSteps != null) {
+                LabeledSlider(
+                    "Duration", Format.duration(phase.minutes), phase.minutes.toFloat(),
+                    onValueChange = { onChange(phase.copy(minutes = it.toInt())) },
+                    range = durationSteps.first.toFloat()..durationSteps.last.toFloat(), step = 5f,
+                    spokenValue = Format.spokenDuration(phase.minutes),
+                )
+            } else {
+                ValueHeader(
+                    "Duration", Format.duration(phase.minutes),
+                    Modifier.clearAndSetSemantics {
+                        contentDescription = "Duration"
+                        stateDescription = Format.spokenDuration(phase.minutes)
+                    },
+                )
+            }
+            if (scaling != null) {
+                Toggle("Fixed length", phase.fixedLength, fontWeight = FontWeight.Medium) { onChange(phase.copy(fixedLength = it)) }
+                Text(scaling, fontSize = 13.sp, color = Theme.secondary)
+            }
             if (isHeatLimited) {
                 Text(
                     "At this temperature and fan, BedJet heats for up to ${Format.duration(phase.maxMinutes)} before its safety cut-off." +

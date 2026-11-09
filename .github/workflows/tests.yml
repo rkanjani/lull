@@ -22,6 +22,10 @@ jobs:
       - name: Test BedJetKit
         working-directory: BedJetKit
         run: swift test
+      # The app's own tests need a simulator, so they run locally; this catches a change that breaks the iPhone app,
+      # its widgets or the watch app before it reaches the release workflow.
+      - name: Build the app, widgets and watch app
+        run: xcodebuild build -project Lull.xcodeproj -scheme Lull -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO -quiet
 
   android:
     runs-on: ubuntu-24.04
@@ -35,6 +39,6 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
-      - name: Test BedJetKit and the app, and build both variants
+      - name: Test BedJetKit, the app and the watch app, and build both variants of each
         working-directory: android
-        run: ./gradlew :bedjetkit:test :app:testDebugUnitTest :app:assembleDebug :app:assembleRelease
+        run: ./gradlew :bedjetkit:test :app:testDebugUnitTest :wear:testDebugUnitTest :app:assembleDebug :app:assembleRelease :wear:assembleDebug :wear:assembleRelease

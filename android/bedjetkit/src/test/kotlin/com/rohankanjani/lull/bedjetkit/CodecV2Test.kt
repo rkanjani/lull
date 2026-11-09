@@ -152,6 +152,20 @@ class CodecV2Test {
     }
 
     @Test
+    fun clockTimeStepsBecomeDurationsFromNow() = runTest {
+        // A V2 only runs steps for a length of time, so one that ends at a time of day is measured from when it's stored.
+        val link = RecordingV2Link()
+        val now = LocalTime.now()
+        val end = (now.hour * 60 + now.minute + 90) % 1440
+        val program = StoredProgram("Wake", listOf(
+            ProgramStep(Mode.COOL, fanStep = 12, temperature = 44, hours = end / 60, minutes = end % 60, endsAtClockTime = true),
+        ))
+        link.store(program, slot = 0)
+        val minutes = (link.sent[1][7].toInt() and 0xff) * 60 + (link.sent[1][8].toInt() and 0xff)
+        assertTrue("an hour and a half, or a minute less if the clock ticked over: $minutes", minutes in 89..90)
+    }
+
+    @Test
     fun refusesModesTheV2Lacks() = runTest {
         val link = RecordingV2Link()
         val program = StoredProgram("Cocoon", listOf(ProgramStep(Mode.EXTENDED_HEAT, fanStep = 5, temperature = 60, hours = 2, minutes = 0)))

@@ -145,8 +145,8 @@ struct BothSidesConfiguration: WidgetConfigurationIntent {
     init() {}
 }
 
-/// Air from one Quick Remote button: a mode, how long, and the temperature and fan to run it at.
-struct RemotePreset: Hashable {
+/// Air from one Quick Remote button, or the watch's Remote: a mode, how long, and the temperature and fan to run it at.
+struct RemotePreset: Hashable, Codable {
     var mode: Mode
     var minutes: Int
     /// Half-degrees Celsius. Ignored for Off, and for modes the BedJet doesn't take a temperature for.

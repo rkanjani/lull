@@ -17,6 +17,8 @@ public final class DemoLink: BedJetLink {
     public var answers = true
     public private(set) var slots: [StoredProgram?]
     public private(set) var clock: (hour: Int, minute: Int)?
+    /// When the clock was set, so it can keep time from there.
+    private var clockSetAt = Date()
     public var lastStatus: DeviceStatus? { state == .ready ? status : nil }
     /// The step of the program running on the unit, connected or not; 0 when none is.
     public var programStep: Int { status.extra?.programStep ?? 0 }
@@ -62,7 +64,9 @@ public final class DemoLink: BedJetLink {
         case 0x07:
             status.fanStep = Int(bytes[1])
             limitHeat()
-        case 0x08 where bytes.count >= 3: clock = (Int(bytes[1]), Int(bytes[2]))
+        case 0x08 where bytes.count >= 3:
+            clock = (Int(bytes[1]), Int(bytes[2]))
+            clockSetAt = Date()
         case 0x40: store(bytes)
         default: break
         }
@@ -175,7 +179,10 @@ public final class DemoLink: BedJetLink {
     /// Pretends the running program started this much earlier, for demos that should show a night in progress.
     public func skipAhead(minutes: Int) {
         guard var run = running else { return }
-        run.stepEnds = run.stepEnds.addingTimeInterval(TimeInterval(-minutes * 60))
+        // A step that ends at a time of day ends then, however much earlier it started.
+        if slots[run.slot]?.steps[run.step].endsAtClockTime != true {
+            run.stepEnds = run.stepEnds.addingTimeInterval(TimeInterval(-minutes * 60))
+        }
         running = run
         while let current = running, Date() >= current.stepEnds { advanceProgram(from: current.stepEnds) }
         if let current = running { status.remainingSeconds = max(0, Int(current.stepEnds.timeIntervalSinceNow)) }
@@ -192,13 +199,22 @@ public final class DemoLink: BedJetLink {
             return
         }
         let step = program.steps[run.step]
-        let minutes = step.hours * 60 + step.minutes
+        var minutes = step.hours * 60 + step.minutes
+        // Like the real unit, a step that ends at a time of day runs until its clock gets there, the next day if it has passed.
+        if step.endsAtClockTime, let now = minuteOfDay(at: start) { minutes = ((minutes - now) % 1440 + 1440) % 1440 }
         run.stepEnds = start.addingTimeInterval(TimeInterval(minutes * 60))
         running = run
         status.fanStep = step.fanStep
         status.targetTemperature = step.temperature
         status.extra?.programStep = run.step + 1
         enter(step.mode, minutes: minutes)
+    }
+
+    /// The unit's time of day at `date`, in minutes after midnight, kept from when its clock was set.
+    private func minuteOfDay(at date: Date) -> Int? {
+        guard let clock else { return nil }
+        let elapsed = Int((date.timeIntervalSince(clockSetAt) / 60).rounded(.down))
+        return ((clock.hour * 60 + clock.minute + elapsed) % 1440 + 1440) % 1440
     }
 
     private func tick() {

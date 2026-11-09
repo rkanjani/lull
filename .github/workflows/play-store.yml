@@ -14,6 +14,10 @@ on:
       # The iPhone app ships through app-store.yml. Lull.xcodeproj stays: it holds the shared version.
       - Lull/**
       - LullUITests/**
+      - LullWatch/**
+      - LullWatchWidgets/**
+      - LullWatchTests/**
+      - LullWatchUITests/**
       - BedJetKit/**
       - fastlane/metadata/en-US/**
   workflow_dispatch:
@@ -55,9 +59,9 @@ jobs:
           ruby-version: "3.4"
           bundler-cache: true
 
-      - name: Test BedJetKit and the app
+      - name: Test BedJetKit, the app and the watch app
         working-directory: android
-        run: ./gradlew :bedjetkit:test :app:testDebugUnitTest
+        run: ./gradlew :bedjetkit:test :app:testDebugUnitTest :wear:testDebugUnitTest
 
       - name: Build, upload and release
         run: |

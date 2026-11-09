@@ -12,10 +12,13 @@ room, or run out of battery; the night keeps going.
 [Google Play](https://play.google.com/store/apps/details?id=com.rohankanjani.lull)
 
 - **Schedules**: build a night out of phases (Cool, Heat, Gentle heat, Turbo, Dry, Pause), each with
-  its own temperature, fan speed and duration, and see the whole curve at a glance.
+  its own temperature, fan speed and duration, and see the whole curve at a glance. Give a schedule a wake time
+  and its phases stretch or shrink in proportion to end then, whenever you start the night; a BedJet 3 keeps to it
+  by its own clock. Phases marked as a fixed length, such as a quick cooldown or a morning warm-up, keep theirs.
 - **Runs on the device**: tonight's schedule is written into one of a BedJet 3's three program slots, or into a
   BedJet V2's single sequence. The V2 has no Gentle heat or Dry, and only Heat has an adjustable temperature.
-- **Remote**: a direct remote for mode, temperature, fan and shut-off timer.
+- **Remote**: a direct remote for mode, temperature, fan and shut-off timer, which can count down or turn off at a
+  time of day.
 - **History**: every change through the night, with the time and room temperature, so the morning
   after you can see what you picked and when.
 - **Widgets**: tonight's schedule and where the night is up to on the Home Screen, Lock Screen and in

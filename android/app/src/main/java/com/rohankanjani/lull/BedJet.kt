@@ -10,6 +10,7 @@ import com.rohankanjani.lull.bedjetkit.Codec
 import com.rohankanjani.lull.bedjetkit.DemoLink
 import com.rohankanjani.lull.bedjetkit.DeviceStatus
 import com.rohankanjani.lull.bedjetkit.Generation
+import com.rohankanjani.lull.bedjetkit.Limits
 import com.rohankanjani.lull.bedjetkit.LinkState
 import com.rohankanjani.lull.bedjetkit.Mode
 import com.rohankanjani.lull.bedjetkit.StoredProgram
@@ -27,18 +28,17 @@ import com.rohankanjani.lull.bedjetkit.store
 import com.rohankanjani.lull.bedjetkit.storedPrograms
 import com.rohankanjani.lull.bedjetkit.syncClock
 import kotlinx.coroutines.CancellationException
+import kotlin.math.abs
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.UUID
-import kotlin.math.abs
-import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.roundToInt
 
 /** What is kept of a BedJet between launches. */
 @Serializable
@@ -54,6 +54,7 @@ data class SavedBedJet(
     val run: ActiveRun? = null,
     val slot: Int? = null,
     /** How the Remote's timer was left, so a time picked there survives Lull being closed while the air runs. */
+    val remoteTimer: RemoteTimer? = null,
     val longestEnds: Long? = null,
     val timerEnds: Long? = null,
 )
@@ -120,9 +121,18 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     private var link: BedJetLink? = null
     private var lastRefresh = 0L
     /**
-     * When the longest run Lull gave the air from the Remote ends. Changing the temperature or fan keeps to it, and
-     * picking a time clears it, so the timer then counts down as it is.
+     * How air from the Remote is timed. Schedules keep their own timing. Saved, so a time picked there holds after the
+     * phone closes Lull while the air runs.
      */
+    private var savedRemoteTimer by mutableStateOf(saved.remoteTimer ?: RemoteTimer.Longest)
+    var remoteTimer: RemoteTimer
+        get() = savedRemoteTimer
+        private set(value) {
+            if (value == savedRemoteTimer) return
+            savedRemoteTimer = value
+            app.save()
+        }
+    /** When the longest run Lull gave the air from the Remote ends, which changing the temperature or fan keeps to. */
     // Only a timer Lull finished setting is kept to; one it was still reading back when Lull closed is left alone.
     private var longestEnds: Long? = plausible(saved.longestEnds)?.takeIf { plausible(saved.timerEnds) != null }
         set(value) { field = value; app.save() }
@@ -147,7 +157,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     private var turnedOffAt: Long? = null
 
     val saved: SavedBedJet
-        get() = SavedBedJet(id, unit, name, nickname, knownGeneration, tonightID, run, slot, longestEnds, timerEnds)
+        get() = SavedBedJet(id, unit, name, nickname, knownGeneration, tonightID, run, slot, remoteTimer, longestEnds, timerEnds)
 
     val tonight: Schedule?
         get() = app.schedules.firstOrNull { it.id == tonightID } ?: app.schedules.firstOrNull()
@@ -180,7 +190,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
      * Starts talking to the BedJet. Only the one on screen asks another phone to hand it over;
      * the rest connect whenever they are free.
      */
-    fun connect(asking: Boolean) {
+    fun connect(asking: Boolean, resuming: Boolean = true) {
         link?.apply {
             onStateChange = null
             onStatus = null
@@ -197,7 +207,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         this.link = link
         linkState = link.state
         lastRefresh = 0
-        resume(asking)
+        if (resuming) resume(asking)
     }
 
     /**
@@ -216,6 +226,24 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         val ble = link as? BleLink
         if (!asking && ble != null) ble.listen() else link?.start()
         restartSearchTimer()
+    }
+
+    /**
+     * Whether the BedJet has reported everything it does since [since], both halves of its report, so what it's doing
+     * now is known rather than what Lull last saw.
+     */
+    fun hasReported(since: Long): Boolean {
+        val at = statusReceivedAt ?: return false
+        return at >= since && status?.extra != null
+    }
+
+    /**
+     * Waits for the BedJet to say what it's doing, so an errand from the watch acts on that. Gives up after [timeout],
+     * leaving the errand's own commands to say what's wrong.
+     */
+    suspend fun awaitReport(since: Long, timeout: Long = 10_000) {
+        val deadline = System.currentTimeMillis() + timeout
+        while (System.currentTimeMillis() < deadline && !hasReported(since)) delay(100)
     }
 
     private fun restartSearchTimer() {
@@ -334,8 +362,14 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
 
     private suspend fun startTonight(schedule: Schedule, link: BedJetLink) {
         perform {
+            // Demos that show a night in progress pretend it started earlier.
+            val elapsed = if (link is DemoLink) app.options.demoElapsedMinutes else 0
+            val startedAt = System.currentTimeMillis() - elapsed * 60_000L
             // Known for certain once connected, which `perform` waited for; checked before anything is written.
-            problem(schedule)?.let { throw BedJetError.InvalidProgram(it) }
+            problem(schedule, startedAt)?.let { throw BedJetError.InvalidProgram(it) }
+            // With a wake time, every phase is scaled to end at it from now. A BedJet 3 is still given the wake time itself for
+            // the last step, so it keeps to it by its own clock.
+            val tonight = schedule.resolved(startingAt = Format.minuteOfDay(startedAt))
             // A V2 holds just the one sequence, which Lull always replaces.
             val slot: Int
             if (link.generation == Generation.V2) {
@@ -350,16 +384,13 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
                 slot = free
                 this.slot = slot
             }
-            link.store(schedule.program, slot)
+            link.store(tonight.program, slot)
             link.startProgram(slot)
             confirmStarted()
-            run = ActiveRun(schedule, System.currentTimeMillis())
-            record(HistoryEntry.Event.ScheduleStarted(schedule.name, schedule.phases))
-            val elapsed = app.options.demoElapsedMinutes
-            if (link is DemoLink && elapsed > 0) {
-                link.skipAhead(elapsed)
-                run = run?.copy(startedAt = System.currentTimeMillis() - elapsed * 60_000L)
-            }
+            run = ActiveRun(tonight, startedAt)
+            remoteTimer = RemoteTimer.Longest
+            record(HistoryEntry.Event.ScheduleStarted(schedule.name, tonight.phases))
+            if (link is DemoLink && elapsed > 0) link.skipAhead(elapsed)
             attempt { refreshSlots() }
         }
     }
@@ -407,6 +438,15 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         // time picked while another phone hands the BedJet over comes after this tap.
         val endingSchedule = run?.schedule?.name
         val asked = System.currentTimeMillis()
+        // Shown as a time, the end on screen holds across modes: a time picked here, or else the BedJet's own countdown,
+        // such as a duration picked here or a timer set on another phone.
+        val shown = status
+        if (app.remoteTimerShowsTime && mode != Mode.STANDBY && !remoteTimer.isAhead && run == null && runningElsewhereStep == null &&
+            shown != null && shown.isRunning && shown.remainingSeconds > 60
+        ) {
+            // Counted from when the BedJet said it, so a report from a while ago doesn't move the end later.
+            remoteTimer = RemoteTimer.Until((statusReceivedAt ?: System.currentTimeMillis()) + shown.remainingSeconds * 1000L)
+        }
         perform {
             // Until the new mode is given its own run, a fan or temperature change leaves the timer alone.
             forgetRemoteTimer()
@@ -417,6 +457,9 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
             turnedOffAt = if (mode == Mode.STANDBY) System.currentTimeMillis() else null
             run = null
             if (endingSchedule != null) record(HistoryEntry.Event.ScheduleEnded(endingSchedule, HistoryEntry.Ending.ByYou))
+            // A time picked on the Remote holds across modes until it passes, while the Remote shows the time. Otherwise each
+            // mode starts at its longest run, as the timer always has.
+            if (mode == Mode.STANDBY || !remoteTimer.isAhead || !app.remoteTimerShowsTime) remoteTimer = RemoteTimer.Longest
             if (mode != Mode.STANDBY) extendRuntime(entering = mode, asked = asked)
         }
     }
@@ -446,22 +489,49 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     suspend fun setRuntime(minutes: Int) {
         val link = link ?: return
         // From now on the timer counts down as it is: nothing on this phone changes it until a mode is chosen.
-        longestEnds = null
+        remoteTimer = RemoteTimer.Picked
         timePickedAt = System.currentTimeMillis()
         perform { link.setRuntime(minutes) }
     }
 
     /**
-     * Whether changing the temperature or fan should keep the timer to the end Lull gave it. Asked before the change
-     * is sent, since in Heat a hotter setting can cut the BedJet's timer by itself. A timer set from another phone or
-     * the BedJet's own remote since Lull last set it is theirs, and Lull stops keeping to it from then on.
+     * Turns the air off at [untilMillis], or as near it as the mode allows. Lull keeps aiming at it as the temperature and
+     * fan change, since each changes how long the BedJet lets the air run, and as the mode changes while the Remote shows
+     * the time.
+     */
+    suspend fun setRuntime(untilMillis: Long) {
+        val link = link ?: return
+        remoteTimer = RemoteTimer.Until(untilMillis)
+        val asked = System.currentTimeMillis()
+        timePickedAt = asked
+        perform {
+            // Sent at once, as far as the BedJet last said the mode may run. A hotter setting still on its way can cut
+            // that short, so like a fan or temperature change, the timer is read back from the BedJet's next report and
+            // aimed again, rather than taken to be what was sent.
+            readTimerBack()
+            val limit = status?.let { if (it.maxRuntimeMinutes > 0) it.maxRuntimeMinutes else it.mode.maxMinutes } ?: Limits.MAX_STEP_MINUTES
+            link.setRuntime(minutes(untilMillis, limit))
+            // Sent, the time is the BedJet's, so moving on from the Remote (switching BedJet, a newer pick) doesn't stop it
+            // being read back. Left unread, the next change couldn't tell it from another phone's timer.
+            withContext(NonCancellable) { extendRuntime(asked = asked) }
+        }
+    }
+
+    /** Minutes from now until [endsAt], to the nearest minute, as far as [limit] allows. */
+    private fun minutes(endsAt: Long, limit: Int): Int =
+        Math.round((endsAt - System.currentTimeMillis()) / 60_000.0).toInt().coerceAtLeast(1).coerceAtMost(limit)
+
+    /**
+     * Whether changing the temperature or fan should keep the timer to its end. Asked before the change is sent, since
+     * in Heat a hotter setting can cut the BedJet's timer by itself. A timer set from another phone or the BedJet's own
+     * remote since Lull last set it is theirs, and Lull stops keeping to it from then on.
      *
      * While a change is sent, [timerEnds] is cleared: the BedJet may cut its own timer for it, so the end is read
      * back afterwards. If a newer slider move replaced that change first, or two changes overlapped, the timer is
      * still Lull's, and the next change reads it back.
      */
     private fun keepsTimer(): Boolean {
-        if (longestEnds == null) return false
+        if (remoteTimer == RemoteTimer.Picked) return false
         val timerEnds = timerEnds
         if (timerEnds == null) {
             // A change cleared it long ago and never read it back, so where the timer is now isn't known.
@@ -478,37 +548,51 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         if (statusReceivedAt == null || statusReceivedAt <= connectedAt) return false
         val unitEnds = statusReceivedAt + status.remainingSeconds * 1000L
         if (abs(unitEnds - timerEnds) >= 60_000) {
-            longestEnds = null
+            remoteTimer = RemoteTimer.Picked
             return false
         }
         return true
     }
 
     /**
-     * Air started from the Remote runs for as long as the BedJet allows, until a time is picked. Changing the
-     * temperature or fan keeps to the end the mode's longest run was given: it never adds time, and gives back
-     * time the BedJet cut short for a hotter setting once the setting allows. Schedules keep their own timing.
-     * [asked] is when the person made the change, so a time picked after it wins.
+     * Air started from the Remote runs for as long as the BedJet allows, or until the time picked there, until a
+     * duration is picked instead. Changing the temperature or fan keeps to the end that gives: it never adds time, and
+     * gives back time the BedJet cut short for a hotter setting once the setting allows. Schedules keep their own timing.
+     * Called just after the change is sent. [asked] is when the person made it, so a duration picked after it wins.
      */
     private suspend fun extendRuntime(entering: Mode? = null, asked: Long) {
         // A schedule started from another phone times its own phases; leave its timer alone.
         val link = link
-        if (run != null || runningElsewhereStep != null || link == null) {
+        if (remoteTimer == RemoteTimer.Picked || run != null || runningElsewhereStep != null || link == null) {
             forgetRemoteTimer()
             return
         }
+        val sent = System.currentTimeMillis()
         // The limit depends on mode, temperature and fan, and the unit keeps the previous timer when
-        // the mode changes, so wait for it to report the new state before reading the limit.
+        // the mode changes, so wait for it to report the new state before reading the limit. Only a report it sent
+        // after the change says what it allows now: one from before would aim at a limit it no longer has.
         delay(600)
         repeat(20) {
             val status = status
-            if (status != null && status.isRunning && status.maxRuntimeMinutes > 0 && (entering == null || status.mode == entering)) {
-                // A time picked while this waited wins.
-                if (timePickedAt >= asked) return
-                val longest = System.currentTimeMillis() + status.maxRuntimeMinutes * 60_000L
-                if (entering != null) longestEnds = longest
-                val longestEnds = longestEnds ?: return
-                val minutes = min(max(((min(longestEnds, longest) - System.currentTimeMillis()) / 60_000.0).roundToInt(), 1), status.maxRuntimeMinutes)
+            val receivedAt = statusReceivedAt
+            if (status != null && receivedAt != null && receivedAt > sent && status.isRunning && status.maxRuntimeMinutes > 0 &&
+                (entering == null || status.mode == entering)
+            ) {
+                // A duration picked while this waited wins. So does a time, which this keeps to as well: it may have
+                // cleared the timer that time read back. One picked in the same millisecond as the change came before it,
+                // as a phone's clock may not tell them apart.
+                if (timePickedAt > asked && !remoteTimer.isAhead) return
+                if (entering != null && remoteTimer == RemoteTimer.Longest) {
+                    longestEnds = System.currentTimeMillis() + status.maxRuntimeMinutes * 60_000L
+                }
+                val end = when (val timer = remoteTimer) {
+                    RemoteTimer.Longest -> longestEnds
+                    is RemoteTimer.Until -> timer.endsAt
+                    RemoteTimer.Picked -> null
+                }
+                if (end == null || end <= System.currentTimeMillis()) return
+                // Capped at the mode's longest run, so a damaged save can't send a timer the BedJet doesn't allow.
+                val minutes = minutes(end, status.maxRuntimeMinutes)
                 var remaining = status.remainingSeconds
                 if (abs(remaining - minutes * 60) > 60) {
                     link.setRuntime(minutes)
@@ -529,10 +613,12 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         readingTimerBackSince = System.currentTimeMillis()
     }
 
-    /** Stops keeping the Remote's timer to an end, until a mode is next chosen. */
+    /** Stops keeping the Remote's timer to an end, until a mode is next chosen or a time picked to turn off at. */
     private fun forgetRemoteTimer() {
         longestEnds = null
         timerEnds = null
+        // A time picked to turn off at outlives this, so a change still reading the timer back mustn't aim at it.
+        readingTimerBackSince = 0L
     }
 
     /**
@@ -560,7 +646,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
             takeControl()
             work()
         } catch (error: CancellationException) {
-            // A newer slider move replaced this one; nothing went wrong.
+            // A newer slider move replaced this one, or the errand it was for ran out of time; nothing went wrong.
             throw error
         } catch (error: Exception) {
             app.report(error.message ?: BedJetError.BadResponse.message.orEmpty(), from = this)
@@ -602,7 +688,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
             if (timing.knownUnit) "known unit" else "scanned", name ?: "unnamed",
         )
         val stamp = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))
-        File(app.getApplication<android.app.Application>().filesDir, "connections.txt").appendText("$stamp $line")
+        File(app.application.filesDir, "connections.txt").appendText("$stamp $line")
     }
 
     // From outside the app
@@ -782,12 +868,15 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     fun unsupportedModes(schedule: Schedule): List<Mode> =
         schedule.phases.map { it.mode }.filter { !generation.supports(it) }.distinct()
 
-    /** Why a schedule can't run on this BedJet, if it can't. */
-    fun problem(schedule: Schedule): String? {
+    /** Why a schedule can't run on this BedJet when started at [now], if it can't. */
+    fun problem(schedule: Schedule, now: Long = System.currentTimeMillis()): String? {
         val modes = unsupportedModes(schedule)
-        if (modes.isEmpty()) return null
-        val names = ListFormatter.getInstance().format(modes.map { it.title })
-        return "$displayName is a BedJet V2, which can't run $names. Edit “${schedule.name}” or pick another schedule for it."
+        if (modes.isNotEmpty()) {
+            val names = ListFormatter.getInstance().format(modes.map { it.title })
+            return "$displayName is a BedJet V2, which can't run $names. Edit “${schedule.name}” or pick another schedule for it."
+        }
+        // Started then, the last phase has to reach the wake time within what BedJet lets it run.
+        return schedule.wakeProblem(startingAt = Format.minuteOfDay(now))
     }
 
     /** A word or two on how the connection is going, short enough for the pill. */
@@ -814,4 +903,23 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         /** How long a widget, tile or shortcut waits for the BedJet to connect by itself before leaving it to the person. */
         var freeWait = 15_000L
     }
+}
+
+/** How air started from the Remote is timed. */
+@Serializable
+sealed interface RemoteTimer {
+    /** As long as the BedJet allows, which depends on the mode, temperature and fan. */
+    @Serializable
+    data object Longest : RemoteTimer
+
+    /** For a duration picked on the Remote, or one set on another phone or the BedJet's own remote: it counts down as it is. */
+    @Serializable
+    data object Picked : RemoteTimer
+
+    /** Until a time picked on the Remote, as far as the mode allows. */
+    @Serializable
+    data class Until(val endsAt: Long) : RemoteTimer
+
+    /** A time picked on the Remote that hasn't come yet. */
+    val isAhead: Boolean get() = this is Until && endsAt > System.currentTimeMillis()
 }

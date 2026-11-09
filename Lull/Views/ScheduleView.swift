@@ -17,7 +17,10 @@ struct ScheduleView: View {
             } else if let step = bedJet.runningElsewhereStep {
                 runningElsewhere(step: step)
             } else if let schedule = bedJet.tonight {
-                planned(schedule)
+                // Redrawn as time passes: with a wake time, how long the night runs, and whether it can, depend on when it starts.
+                TimelineView(.periodic(from: .now, by: 30)) { timeline in
+                    planned(schedule, now: timeline.date)
+                }
             } else {
                 Card {
                     VStack(alignment: .leading, spacing: 6) {
@@ -33,7 +36,7 @@ struct ScheduleView: View {
                 ForEach(others) { schedule in row(schedule) }
             }
             Button {
-                editing = Schedule(name: "New schedule", phases: [Phase(.cool, fan: 40, minutes: 240)])
+                editing = Schedule.blank()
             } label: {
                 Label("New Schedule", systemImage: "plus")
             }
@@ -48,7 +51,7 @@ struct ScheduleView: View {
         bedJet.run?.schedule.id ?? bedJet.tonight?.id
     }
 
-    private func planned(_ schedule: Schedule) -> some View {
+    private func planned(_ schedule: Schedule, now date: Date) -> some View {
         Card {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(alignment: .top) {
@@ -71,8 +74,10 @@ struct ScheduleView: View {
                         .accessibilityAction(named: "Delete") { model.delete(schedule) }
                         .accessibilityAction(named: "Duplicate") { duplicate(schedule) }
                 }
-                NightTimeline(schedule: schedule, startMinute: minuteOfDay(Date()))
-                let problem = bedJet.problem(running: schedule)
+                // Started now: with a wake time, the last phase runs until it from now.
+                let now = Format.minuteOfDay(date)
+                NightTimeline(schedule: schedule.resolved(startingAt: now), startMinute: now)
+                let problem = bedJet.problem(running: schedule, at: date)
                 if let problem {
                     Label(problem, systemImage: "exclamationmark.triangle")
                         .scaledFont(13)
@@ -145,7 +150,7 @@ struct ScheduleView: View {
                             .accessibilityLabel("\(current.phase.mode.activity), \(Format.spokenDuration(current.minutesLeft)) left")
                     }
                 }
-                NightTimeline(schedule: run.schedule, startMinute: minuteOfDay(run.startedAt), progress: run.progress(at: now))
+                NightTimeline(schedule: run.schedule, startMinute: Format.minuteOfDay(run.startedAt), progress: run.progress(at: now))
                 Button("End Night") { Task { await bedJet.endNight() } }
                     .buttonStyle(PrimaryButtonStyle(prominent: false))
                     .disabled(bedJet.isBusy)
@@ -161,7 +166,7 @@ struct ScheduleView: View {
         return VStack(alignment: .trailing, spacing: 8) {
             Button { editing = schedule } label: { ScheduleRow(schedule: schedule, reservesCorner: canSwap && !beneath) }
                 .buttonStyle(.plain)
-                .accessibilityLabel("\(schedule.name), \(Format.spokenDuration(schedule.totalMinutes)), \(schedule.phases.count) \(schedule.phases.count == 1 ? "phase" : "phases")")
+                .accessibilityLabel("\(schedule.name), \(schedule.spokenSummary)")
                 .accessibilityHint("Edits this schedule")
                 .accessibilityAction(named: "Delete") { model.delete(schedule) }
                 .accessibilityAction(named: "Duplicate") { duplicate(schedule) }
@@ -202,11 +207,6 @@ struct ScheduleView: View {
         copy.name = Codec.sanitize("\(schedule.name) copy")
         model.save(copy)
     }
-
-    private func minuteOfDay(_ date: Date) -> Int {
-        let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
-        return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
-    }
 }
 
 private struct ScheduleRow: View {
@@ -222,7 +222,7 @@ private struct ScheduleRow: View {
                     .scaledFont(19, .semibold)
                     .padding(.trailing, reservesCorner ? corner : 0)
                 NightCurve(phases: schedule.phases, lineWidth: 2.5).frame(height: 64)
-                Text("\(Format.duration(schedule.totalMinutes)) · \(schedule.phases.count) \(schedule.phases.count == 1 ? "phase" : "phases")")
+                Text(schedule.summary)
                     .scaledFont(13, .medium)
                     .foregroundStyle(Theme.secondary)
             }

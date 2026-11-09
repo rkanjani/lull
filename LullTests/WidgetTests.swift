@@ -42,6 +42,16 @@ final class WidgetTests: XCTestCase {
         XCTAssertEqual(run.phaseEnds[0], run.startedAt.addingTimeInterval(TimeInterval(schedule.phases[0].minutes * 60)))
     }
 
+    func testARunStartedLateStillEndsAtTheWakeTime() throws {
+        // Two hours of cooling ending at 6:30, started at 11:30 p.m.: each hour stretches to three and a half.
+        let schedule = Schedule(name: "Wake", phases: [Phase(.cool, minutes: 60), Phase(.cool, fan: 20, minutes: 60)], wakeTime: 6 * 60 + 30)
+        let run = ActiveRun(schedule: schedule.resolved(startingAt: Format.minuteOfDay(now)), startedAt: now)
+        let wake = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 22, hour: 6, minute: 30)))
+        XCTAssertEqual(run.endsAt, wake)
+        XCTAssertEqual(run.phaseEnds, [now.addingTimeInterval(210 * 60), wake])
+        XCTAssertEqual(WidgetSnapshot(tonight: schedule, run: run).redraws(from: now).last, wake)
+    }
+
     func testLastNightSkipsTheNightStillRunning() throws {
         var snapshot = running(startedMinutesAgo: 60)
         let started = HistoryEntry(date: now.addingTimeInterval(-3600), event: .scheduleStarted(name: schedule.name, phases: schedule.phases))

@@ -1,5 +1,14 @@
 package com.rohankanjani.lull.ui
 
+import com.rohankanjani.lull.Format
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.rememberTimePickerState
+import androidx.compose.material3.TimePickerDefaults
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -21,18 +30,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AcUnit
-import androidx.compose.material.icons.filled.Air
-import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.LocalFireDepartment
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PowerSettingsNew
-import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -45,9 +49,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -59,32 +61,17 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rohankanjani.lull.bedjetkit.Mode
 import com.rohankanjani.lull.title
 import kotlin.math.roundToInt
+import androidx.compose.material3.ColorScheme
 
-object Theme {
-    val background = Color.Black
-    val surface = Color(0.055f, 0.059f, 0.071f)
-    val raised = Color(0.098f, 0.102f, 0.118f)
-    val hairline = Color.White.copy(alpha = 0.08f)
-    val secondary = Color.White.copy(alpha = 0.55f)
-    /** The faintest text that still reads at 4.5:1 against the background and surfaces. */
-    val tertiary = Color.White.copy(alpha = 0.48f)
-
-    val cool = Color(0.30f, 0.64f, 1.0f)
-    val deepCool = Color(0.17f, 0.36f, 1.0f)
-    val warm = Color(1.0f, 0.54f, 0.24f)
-    val hot = Color(1.0f, 0.30f, 0.18f)
-    val neutral = Color(0.56f, 0.56f, 0.60f)
-    /** iOS system green, used for connection and switches. */
-    val green = Color(0.20f, 0.78f, 0.35f)
-    /** iOS system red, used for destructive actions. */
-    val red = Color(1.0f, 0.27f, 0.23f)
-
-    val colors = darkColorScheme(
+/** Lull's Material colours: always dark, white on near-black. */
+val Theme.colors: ColorScheme
+    get() = darkColorScheme(
         primary = Color.White,
         onPrimary = Color.Black,
         background = background,
@@ -98,42 +85,10 @@ object Theme {
         error = red,
     )
 
-    /** Numbers in the UI keep their width as they change. */
-    val tabular = TextStyle(fontFeatureSettings = "tnum")
-}
-
-val Mode.tint: Color
-    get() = when (this) {
-        Mode.COOL -> Theme.cool
-        Mode.HEAT -> Theme.warm
-        Mode.TURBO -> Theme.hot
-        Mode.EXTENDED_HEAT -> Color(1.0f, 0.70f, 0.25f)
-        Mode.DRY -> Color(0.35f, 0.84f, 0.77f)
-        Mode.STANDBY, Mode.WAIT -> Theme.neutral
-    }
-
-val Mode.icon: ImageVector
-    get() = when (this) {
-        Mode.STANDBY -> Icons.Filled.PowerSettingsNew
-        Mode.HEAT -> Icons.Filled.LocalFireDepartment
-        Mode.TURBO -> Icons.Filled.Bolt
-        Mode.EXTENDED_HEAT -> Icons.Filled.WbSunny
-        Mode.COOL -> Icons.Filled.AcUnit
-        Mode.DRY -> Icons.Filled.Air
-        Mode.WAIT -> Icons.Filled.Pause
-    }
-
 @Composable
 fun LullTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = Theme.colors, content = content)
 }
-
-/**
- * Whether the person has picked one of the largest text sizes, where layouts stack instead of squeezing.
- * Like iOS's accessibility text sizes, which begin around one and a half times the default.
- */
-@Composable
-fun isLargeText(): Boolean = LocalDensity.current.fontScale >= 1.5f
 
 /** Small all-caps label used above groups of content. */
 @Composable
@@ -233,6 +188,8 @@ fun LabeledSlider(
     enabled: Boolean = true,
     /** What TalkBack reads for the value, when the shown text abbreviates it. */
     spokenValue: String? = null,
+    /** Set when the slider swaps places with a row of that height, so its name stays where it was. */
+    headerMinHeight: Dp = Dp.Unspecified,
 ) {
     val haptics = LocalHapticFeedback.current
     val steps = (((range.endInclusive - range.start) / step).roundToInt() - 1).coerceAtLeast(0)
@@ -242,7 +199,11 @@ fun LabeledSlider(
         Modifier.alpha(if (enabled) 1f else 0.4f).semantics(mergeDescendants = true) {},
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        ValueHeader(title, valueText, Modifier.clearAndSetSemantics {})
+        // Centred like the row it swaps with, rather than on the value's baseline, so the name lines up with it exactly.
+        val centred = headerMinHeight != Dp.Unspecified
+        Box(Modifier.fillMaxWidth().heightIn(min = headerMinHeight), contentAlignment = Alignment.CenterStart) {
+            ValueHeader(title, valueText, Modifier.clearAndSetSemantics {}, centred = centred)
+        }
         Slider(
             value = value.coerceIn(range),
             onValueChange = { new ->
@@ -278,9 +239,31 @@ fun LabeledSlider(
     }
 }
 
+/**
+ * A setting that's on or off, its name beside a switch. The whole row is one switch for TalkBack, as a Toggle is on iOS.
+ */
+@Composable
+fun Toggle(label: String, checked: Boolean, modifier: Modifier = Modifier, fontWeight: FontWeight = FontWeight.Normal, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier.fillMaxWidth().heightIn(min = 48.dp).toggleable(checked, role = Role.Switch, onValueChange = onChange),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, fontSize = 17.sp, fontWeight = fontWeight, modifier = Modifier.weight(1f, fill = false))
+        Spacer(Modifier.width(16.dp))
+        Switch(
+            checked, onCheckedChange = null,
+            colors = SwitchDefaults.colors(
+                checkedTrackColor = Theme.green, checkedThumbColor = Color.White, checkedBorderColor = Theme.green,
+                uncheckedTrackColor = Theme.neutral.copy(alpha = 0.35f), uncheckedThumbColor = Color.White, uncheckedBorderColor = Color.Transparent,
+            ),
+        )
+    }
+}
+
 /** A setting's name with its value at the end of the line, stacked instead when large text won't fit on one. */
 @Composable
-fun ValueHeader(title: String, value: String, modifier: Modifier = Modifier) {
+fun ValueHeader(title: String, value: String, modifier: Modifier = Modifier, centred: Boolean = false) {
     val name = @Composable { Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Theme.secondary) }
     val reading = @Composable { Text(value, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, style = Theme.tabular) }
     if (isLargeText()) {
@@ -289,7 +272,7 @@ fun ValueHeader(title: String, value: String, modifier: Modifier = Modifier) {
             reading()
         }
     } else {
-        Row(modifier, verticalAlignment = Alignment.Bottom) {
+        Row(modifier, verticalAlignment = if (centred) Alignment.CenterVertically else Alignment.Bottom) {
             name()
             Spacer(Modifier.weight(1f))
             reading()
@@ -354,3 +337,112 @@ fun ModePicker(modes: List<Mode>, selection: Mode?, hint: String? = null, onSele
 /** Horizontal gap helper for rows of text and icons. */
 @Composable
 fun Gap(width: Dp) = Spacer(Modifier.width(width))
+
+/** How tall a row with a time or a button is, at least: Android's touch target, as the iPhone's rows are 44 points. */
+val TimeRowHeight = 48.dp
+
+/** Choices side by side with one selected, as the °F and °C setting and the Remote's Timer and Time are. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun <T> SegmentedChoice(
+    options: List<Pair<T, String>>,
+    selected: T,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    /** What TalkBack reads for an option, when its label abbreviates it. */
+    spoken: (T) -> String? = { null },
+) {
+    SingleChoiceSegmentedButtonRow(modifier) {
+        options.forEachIndexed { index, (value, label) ->
+            SegmentedButton(
+                selected = selected == value,
+                onClick = { onSelect(value) },
+                shape = SegmentedButtonDefaults.itemShape(index, options.size),
+                icon = {},
+                colors = SegmentedButtonDefaults.colors(
+                    activeContainerColor = Theme.neutral.copy(alpha = 0.5f),
+                    activeContentColor = Color.White,
+                    inactiveContainerColor = Theme.raised,
+                    inactiveContentColor = Color.White,
+                    activeBorderColor = Theme.hairline,
+                    inactiveBorderColor = Theme.hairline,
+                ),
+                modifier = spoken(value)?.let { words -> Modifier.semantics { contentDescription = words } } ?: Modifier,
+            ) { Text(label) }
+        }
+    }
+}
+
+/** A setting's name with its time after it, which reads the name itself to TalkBack. At the largest text sizes the time goes under it. */
+@Composable
+fun TimeRow(
+    title: String,
+    modifier: Modifier = Modifier,
+    /** The schedule editor's rows are 17; the Remote's match its sliders' titles. */
+    fontSize: TextUnit = 17.sp,
+    color: Color = Color.Unspecified,
+    time: @Composable () -> Unit,
+) {
+    val label = @Composable { Text(title, fontSize = fontSize, fontWeight = FontWeight.Medium, color = color, modifier = Modifier.clearAndSetSemantics {}) }
+    if (isLargeText()) {
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            label()
+            time()
+        }
+    } else {
+        // As tall as every other such row, so labels stay put when one row swaps for another.
+        Row(modifier.heightIn(min = TimeRowHeight), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) { label() }
+            time()
+        }
+    }
+}
+
+/** A time of day that opens a picker. */
+@Composable
+fun TimeChip(minuteOfDay: Int, name: String, onClickLabel: String, onClick: () -> Unit) {
+    Text(
+        Format.clock(minuteOfDay),
+        fontSize = 17.sp,
+        style = Theme.tabular,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(Theme.raised)
+            .clickable(role = Role.Button, onClickLabel = onClickLabel, onClick = onClick)
+            .semantics { contentDescription = "$name, ${Format.clock(minuteOfDay)}" }
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TimeOfDayPicker(title: String, minuteOfDay: Int, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
+    val state = rememberTimePickerState(minuteOfDay / 60, minuteOfDay % 60, is24Hour = Format.use24Hour)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Theme.raised,
+        title = { Text(title) },
+        text = {
+            TimePicker(
+                state,
+                colors = TimePickerDefaults.colors(
+                    clockDialColor = Theme.surface,
+                    selectorColor = Color.White,
+                    clockDialSelectedContentColor = Color.Black,
+                    timeSelectorSelectedContainerColor = Color.White,
+                    timeSelectorSelectedContentColor = Color.Black,
+                    timeSelectorUnselectedContainerColor = Theme.surface,
+                    periodSelectorSelectedContainerColor = Color.White,
+                    periodSelectorSelectedContentColor = Color.Black,
+                ),
+            )
+        },
+        confirmButton = {
+            TextButton({
+                onPick(state.hour * 60 + state.minute)
+                onDismiss()
+            }) { Text("Done") }
+        },
+        dismissButton = { TextButton(onDismiss) { Text("Cancel") } },
+    )
+}

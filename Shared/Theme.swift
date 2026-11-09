@@ -90,10 +90,17 @@ struct LabeledSlider: View {
     let range: ClosedRange<Double>
     var step: Double = 1
     var tint: Color = .white
+    /// Set when the slider swaps places with a row of that height, so its name stays where it was.
+    var headerMinHeight: CGFloat?
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ValueHeader(title: title, value: valueText)
+            // Placed like the row it swaps with, rather than on the value's baseline, so the name lines up with it exactly:
+            // centred beside a time, or at the top above one at the largest text sizes.
+            ValueHeader(title: title, value: valueText,
+                        alignment: headerMinHeight == nil ? .firstTextBaseline : typeSize.isAccessibilitySize ? .top : .center)
+                .frame(minHeight: headerMinHeight, alignment: .leading)
             Slider(value: $value, in: range, step: step)
                 .tint(tint)
                 .sensoryFeedback(.selection, trigger: value)
@@ -108,14 +115,28 @@ struct LabeledSlider: View {
     }
 }
 
+/// How tall a row with a time picker or a button is, at least, so rows that swap one for another keep their labels in place.
+let timeRowHeight: CGFloat = 44
+
+/// A minute of the day as the `Date` a time picker edits: today, at that time.
+func timeOfDayBinding(get: @escaping () -> Int, set: @escaping (Int) -> Void) -> Binding<Date> {
+    Binding {
+        let minute = get()
+        return Calendar.current.date(bySettingHour: minute / 60, minute: minute % 60, second: 0, of: Date()) ?? Date()
+    } set: { date in
+        set(Format.minuteOfDay(date))
+    }
+}
+
 /// A setting's name with its value at the end of the line, stacked instead when large text won't fit on one.
 struct ValueHeader: View {
     let title: String
     let value: String
+    var alignment: VerticalAlignment = .firstTextBaseline
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: alignment) {
                 name
                 Spacer()
                 reading

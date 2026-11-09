@@ -1,3 +1,6 @@
+// The watch apps reach the BedJet through the phone, and watchOS can't advertise a hand-over request
+// (`CBPeripheralManager`), so Bluetooth is left out there.
+#if !os(watchOS)
 @preconcurrency import CoreBluetooth
 import CryptoKit
 import Foundation
@@ -600,3 +603,4 @@ private final class HandoffRequests: NSObject, CBPeripheralManagerDelegate {
         MainActor.assumeIsolated { advertise() }
     }
 }
+#endif
