@@ -122,7 +122,7 @@ data class WidgetSnapshot(
 
     /** Saves the snapshot and says whether it differs from what was there, so widgets are only redrawn when it does. */
     fun save(context: Context): Boolean {
-        val data = AppModel.json.encodeToString(serializer(), this)
+        val data = lullJson.encodeToString(serializer(), this)
         val file = file(context)
         if (file.exists() && runCatching { file.readText() }.getOrNull() == data) return false
         return runCatching {
@@ -136,7 +136,7 @@ data class WidgetSnapshot(
         private fun file(context: Context) = File(context.filesDir, "widgets.json")
 
         fun load(context: Context): WidgetSnapshot? =
-            runCatching { AppModel.json.decodeFromString(serializer(), file(context).readText()) }.getOrNull()
+            runCatching { lullJson.decodeFromString(serializer(), file(context).readText()) }.getOrNull()
 
         /**
          * What to save for a BedJet that just reported. The BedJet reports every second and its timer drifts against
@@ -209,9 +209,20 @@ data class WidgetBedJet(
     fun live(now: Long): LiveStatus? = live?.takeIf { it.endsAt > now }
 }
 
-/** "7 hr 45 min · 4 phases" */
+/** How long the night runs, "7 hr 45 min", or "Until 6:30 AM" with a wake time, since then that depends on when it starts. */
+val Schedule.length: String
+    get() = wakeTime?.let { "Until ${Format.clock(it)}" } ?: Format.duration(totalMinutes)
+
+val Schedule.spokenLength: String
+    get() = wakeTime?.let { "until ${Format.clock(it)}" } ?: Format.spokenDuration(totalMinutes)
+
+/** Short enough for a small widget or complication: "7h 45m", or the wake time. */
+val Schedule.shortLength: String
+    get() = wakeTime?.let { Format.clock(it) } ?: Format.shortDuration(totalMinutes)
+
+/** "7 hr 45 min · 4 phases", or "Until 6:30 AM · 4 phases" */
 val Schedule.summary: String
-    get() = "${Format.duration(totalMinutes)} · ${phases.size} ${if (phases.size == 1) "phase" else "phases"}"
+    get() = "$length · ${phases.size} ${if (phases.size == 1) "phase" else "phases"}"
 
 val Schedule.spokenSummary: String
-    get() = "${Format.spokenDuration(totalMinutes)}, ${phases.size} ${if (phases.size == 1) "phase" else "phases"}"
+    get() = "$spokenLength, ${phases.size} ${if (phases.size == 1) "phase" else "phases"}"

@@ -28,6 +28,7 @@ import com.rohankanjani.lull.bedjetkit.Mode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -128,6 +129,24 @@ class WidgetUiTest {
     }
 
     @Test
+    fun lullsOwnShortcutsGoThroughItsCommandScreen() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        // Lull's own Start Night, from the tile, the app shortcut and the widgets, starts tonight's schedule.
+        assertEquals(AppCommands.Command.StartNight(), AppCommands.from(AppCommands.startNightIntent(context)))
+        assertEquals(AppCommands.Command.StartNight("right"), AppCommands.from(AppCommands.startNightIntent(context, "right")))
+        // Its Turn On and Turn Off shortcuts are the automation actions of those names, through the same screen.
+        for (action in listOf(AutomationCall.TURN_ON, AutomationCall.TURN_OFF)) {
+            val shortcut = AppCommands.actionIntent(context, action)
+            assertEquals(CommandActivity::class.java.name, shortcut.component?.className)
+            assertEquals(AppCommands.Command.Automate(AutomationCall(action)), AppCommands.from(shortcut))
+        }
+        // An automation app can't send one to Lull's main screen, which takes nothing but a tab.
+        assertNull(AppCommands.shown(Intent(AutomationCall.TURN_ON).putExtra("mode", "cool")))
+        val screen = Intent(AutomationCall.TURN_ON).setPackage(context.packageName)
+        assertTrue(context.packageManager.queryIntentActivities(screen, 0).isEmpty())
+    }
+
+    @Test
     fun quickRemoteButtonsCarryTheirPreset() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         for (preset in RemotePreset.defaults + RemotePreset(Mode.DRY, 45, 60, 60)) {
@@ -200,7 +219,10 @@ class WidgetUiTest {
 
     @Test
     fun startNightFromATileOrShortcut() {
-        val open = Intent(ApplicationProvider.getApplicationContext(), MainActivity::class.java).putExtra("ephemeral", true)
+        // Without wake times, as launchLull starts, so the night starts whatever the time of day.
+        val open = Intent(ApplicationProvider.getApplicationContext(), MainActivity::class.java)
+            .putExtra("ephemeral", true)
+            .putExtra("noWakeTimes", true)
         ActivityScenario.launch<MainActivity>(open).use { scenario ->
             // The button goes through Lull's own screen for commands, which hands it to Lull.
             scenario.onActivity { it.startActivity(AppCommands.startNightIntent(it)) }

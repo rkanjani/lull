@@ -33,6 +33,7 @@ import com.rohankanjani.lull.WidgetBedJet
 import com.rohankanjani.lull.WidgetSnapshot
 import com.rohankanjani.lull.activity
 import com.rohankanjani.lull.bedjetkit.Mode
+import com.rohankanjani.lull.length
 import com.rohankanjani.lull.setting
 import com.rohankanjani.lull.spokenSummary
 import com.rohankanjani.lull.ui.Theme
@@ -111,7 +112,7 @@ private fun Idle(bedJet: WidgetBedJet, name: String?, width: Dp, isMedium: Boole
             Gap(6.dp)
         }
         Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(Format.duration(schedule.totalMinutes), style = widgetText(12.sp, Theme.secondary, FontWeight.Medium), maxLines = 1)
+            Text(schedule.length, style = widgetText(12.sp, Theme.secondary, FontWeight.Medium), maxLines = 1)
             Spacer(GlanceModifier.defaultWeight())
             Box(
                 GlanceModifier

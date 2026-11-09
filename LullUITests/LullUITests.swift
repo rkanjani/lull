@@ -6,7 +6,7 @@ final class LullUITests: XCTestCase {
 
     override func setUp() {
         continueAfterFailure = false
-        app.launchArguments = ["-ephemeral"]
+        app.launchArguments = ["-ephemeral", "-noWakeTimes"]
         app.launch()
     }
 
@@ -85,6 +85,81 @@ final class LullUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Use Warm Welcome tonight"].waitForExistence(timeout: 5))
     }
 
+    func testAWakeTimeScalesTheNight() {
+        // The starter schedules as they come, with their wake times.
+        app.terminate()
+        app.launchArguments = ["-ephemeral"]
+        app.launch()
+        app.tabBars.buttons["Schedule"].tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Warm Welcome'")).firstMatch.tap()
+        XCTAssertTrue(app.buttons["Add Phase"].waitForExistence(timeout: 5))
+
+        // Warm Welcome wakes where its night ends from the usual bedtime, so the editor shows both times and each phase's start
+        // on a usual night.
+        let wakeTime = app.buttons["Wake time"]
+        XCTAssertTrue(wakeTime.waitForExistence(timeout: 5))
+        XCTAssertTrue(wakeTime.isSelected)
+        XCTAssertTrue(app.staticTexts["Usual bedtime"].exists)
+        XCTAssertTrue(app.staticTexts["Wake time"].exists)
+        let timeline = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Night timeline, '")).firstMatch
+        XCTAssertTrue(timeline.waitForExistence(timeout: 5))
+        let night = timeline.label
+        let last = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Phase 4,'")).firstMatch
+        XCTAssertTrue(last.label.contains("40 minutes, fixed length, starts "), last.label)
+        capture("wake-time-editor")
+
+        // Its cool is the only phase that stretches or shrinks, so it's as long as the rest leave, with no slider.
+        let cool = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Phase 3,'")).firstMatch
+        XCTAssertTrue(cool.label.contains("6 hours, starts "), cool.label)
+        cool.tap()
+        XCTAssertTrue(app.buttons["Remove Phase"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.sliders["Duration"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Fills the rest of the night'")).firstMatch.exists)
+        sleep(1)
+        capture("wake-time-fills")
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.buttons["Remove Phase"].waitForNonExistence(timeout: 5))
+
+        // On Bedtime the night runs from the usual bedtime for the phases' set lengths, with no wake time.
+        app.buttons["Bedtime"].tap()
+        XCTAssertTrue(app.staticTexts["Wake time"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Usual bedtime"].exists)
+        capture("wake-time-off")
+        // A shorter first phase ends the night sooner, until choosing Wake time again brings back the one it had: the cool
+        // takes up the 5 minutes.
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Phase 1,'")).firstMatch.tap()
+        let duration = app.sliders["Duration"]
+        XCTAssertTrue(duration.waitForExistence(timeout: 5))
+        slide(duration, from: 0.97, to: 0)
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.buttons["Remove Phase"].waitForNonExistence(timeout: 5))
+        XCTAssertNotEqual(timeline.label, night)
+        wakeTime.tap()
+        XCTAssertTrue(app.staticTexts["Wake time"].waitForExistence(timeout: 5))
+        XCTAssertEqual(timeline.label, night, "the wake time it had, not where the shorter night would end")
+        XCTAssertTrue(cool.label.contains("6 hours, 5 minutes, starts "), cool.label)
+
+        // The starter's closing warm-up keeps its length while the rest of the night stretches or shrinks.
+        last.tap()
+        XCTAssertTrue(app.buttons["Remove Phase"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.sliders["Duration"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Stays 40 min while the rest of the night stretches or shrinks to end at '")).firstMatch.exists)
+        sleep(1)
+        capture("wake-time-phase")
+        // Not fixed, it stretches or shrinks with the rest.
+        app.switches["Fixed length"].coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Stretches or shrinks with the rest of the night to end at '")).firstMatch
+            .waitForExistence(timeout: 5))
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Phase 4,' AND NOT (label CONTAINS 'fixed length')")).firstMatch
+            .waitForExistence(timeout: 5))
+
+        // Saved, it's listed by when it ends.
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Warm Welcome, until '")).firstMatch.waitForExistence(timeout: 5))
+        capture("wake-time-schedule")
+    }
+
     func testHistoryKeepsTheNight() {
         app.tabBars.buttons["History"].tap()
         XCTAssertTrue(app.staticTexts["No nights yet"].waitForExistence(timeout: 10))
@@ -94,6 +169,7 @@ final class LullUITests: XCTestCase {
         XCTAssertTrue(heat.waitForExistence(timeout: 10))
         sleep(2)
         heat.tap()
+        showTimer()
         XCTAssertTrue(app.sliders["Turns off in"].waitForExistence(timeout: 5))
         // A setting is recorded once the BedJet has held it for a few seconds.
         sleep(4)
@@ -135,7 +211,7 @@ final class LullUITests: XCTestCase {
 
     func testHistoryListsNightsAsRows() {
         app.terminate()
-        app.launchArguments = ["-ephemeral", "-demoHistory"]
+        app.launchArguments = ["-ephemeral", "-noWakeTimes", "-demoHistory"]
         app.launch()
         app.tabBars.buttons["History"].tap()
 
@@ -163,9 +239,15 @@ final class LullUITests: XCTestCase {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "\(title),")).firstMatch
     }
 
+    /// The Remote's timer as a duration, the default, whatever an earlier run left chosen: the choice is kept even with `-ephemeral`.
+    private func showTimer() {
+        let timerOption = app.buttons["Timer"]
+        if timerOption.waitForExistence(timeout: 5), !timerOption.isSelected { timerOption.tap() }
+    }
+
     private func relaunch(_ arguments: [String]) {
         app.terminate()
-        app.launchArguments = ["-ephemeral"] + arguments
+        app.launchArguments = ["-ephemeral", "-noWakeTimes"] + arguments
         app.launch()
     }
 
@@ -198,6 +280,7 @@ final class LullUITests: XCTestCase {
         XCTAssertTrue(second.waitForExistence(timeout: 5))
         sleep(2)
         heat.tap()
+        showTimer()
         let timer = app.sliders["Turns off in"]
         XCTAssertTrue(timer.waitForExistence(timeout: 5))
 
@@ -277,11 +360,47 @@ final class LullUITests: XCTestCase {
         XCTAssertTrue(app.buttons["BEDJET-DEMO · D3A0"].waitForExistence(timeout: 5))
     }
 
+    func testFirmwareUpdateIsOfferedAndInstalled() {
+        relaunch(["-demoFirmwareUpdate"])
+        // The simulated BedJet offers newer firmware as soon as it connects with the air off.
+        let offer = app.alerts["Firmware update available"]
+        XCTAssertTrue(offer.waitForExistence(timeout: 10))
+        capture("firmware-update")
+        offer.buttons["Update Now"].tap()
+        // It restarts to check, downloads the update, restarts again into it, and Lull says so once it's back.
+        let installed = app.alerts["BedJet updated"]
+        XCTAssertTrue(installed.waitForExistence(timeout: 30))
+        XCTAssertTrue(installed.staticTexts["BEDJET-DEMO is now on firmware V1.21 (demo)."].exists)
+        installed.buttons["OK"].tap()
+        XCTAssertTrue(pill("BEDJET-DEMO").waitForExistence(timeout: 5))
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
+
+    func testAFirmwareUpdatePutOffWaitsInTheBedJetSheet() {
+        relaunch(["-demoFirmwareUpdate"])
+        let offer = app.alerts["Firmware update available"]
+        XCTAssertTrue(offer.waitForExistence(timeout: 10))
+        offer.buttons["Not Now"].tap()
+        pill("BEDJET-DEMO").tap()
+        let update = app.buttons["Update Firmware"]
+        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5))
+        for _ in 0..<8 where !(update.exists && update.isHittable) { app.swipeUp() }
+        XCTAssertTrue(update.isEnabled)
+        capture("firmware-update-sheet")
+        update.tap()
+        XCTAssertTrue(app.alerts.buttons["Update"].waitForExistence(timeout: 5))
+        app.alerts.buttons["Update"].tap()
+        // Asked for from the sheet, how it went is said there, and the offer isn't made again.
+        XCTAssertTrue(app.staticTexts["Your BedJet updated its firmware to V1.21 (demo)."].waitForExistence(timeout: 30))
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+    }
+
     func testRemoteAndDevice() {
         let heat = app.buttons["Heat"]
         XCTAssertTrue(heat.waitForExistence(timeout: 10))
         sleep(2)
         heat.tap()
+        showTimer()
         // Turning a mode on asks for the longest run the simulated BedJet allows: 4 hours of heat.
         let timer = app.sliders["Turns off in"]
         XCTAssertTrue(timer.waitForExistence(timeout: 5))
@@ -305,10 +424,67 @@ final class LullUITests: XCTestCase {
         expectation(for: NSPredicate(format: "value == '4 hours'"), evaluatedWith: timer)
         waitForExpectations(timeout: 5)
         capture("remote-heat")
+
+        // Shown as a time, it's when the countdown runs out, and the choice is remembered.
+        app.buttons["Time"].tap()
+        XCTAssertTrue(app.datePickers.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Turns off at"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'In 3 hr' OR label BEGINSWITH 'In 4 hr'")).firstMatch.exists)
+        XCTAssertFalse(timer.exists)
+        capture("remote-time")
+        relaunch([])
+        app.buttons["Heat"].tap()
+        XCTAssertTrue(app.datePickers.firstMatch.waitForExistence(timeout: 10), "still shown as a time after relaunching")
+        // Back to the default, which later tests and launches expect.
+        app.buttons["Timer"].tap()
+        XCTAssertTrue(app.sliders["Turns off in"].waitForExistence(timeout: 5))
         app.buttons["Off"].tap()
 
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'BedJet'")).firstMatch.tap()
         XCTAssertTrue(app.staticTexts["Saved on the BedJet"].waitForExistence(timeout: 5) || app.staticTexts["SAVED ON THE BEDJET"].waitForExistence(timeout: 2))
         capture("device")
+    }
+
+    func testWiFiAndFirmwareCheck() {
+        XCTAssertTrue(app.buttons["Heat"].waitForExistence(timeout: 10))
+        sleep(2)
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'BedJet'")).firstMatch.tap()
+        // The sheet's list only makes rows as they scroll into view.
+        let wifi = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Network'")).firstMatch
+        XCTAssertTrue(app.staticTexts["Kind, BedJet 3"].waitForExistence(timeout: 10))
+        for _ in 0..<8 where !(wifi.exists && wifi.isHittable) { app.swipeUp() }
+        wifi.tap()
+
+        // The network's name is typed, and the simulated BedJet joins any network, testing it one step a second.
+        let name = app.textFields["Name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.tap()
+        name.typeText("Home")
+        let password = app.textFields["Password"]
+        password.tap()
+        password.typeText("12345678\n")
+        let join = app.buttons["Join Network"]
+        join.tap()
+        // What the BedJet is doing takes the button's title, and how it went goes below once the title is back.
+        XCTAssertTrue(join.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Your BedJet joined “Home” and can now check for firmware updates."].waitForExistence(timeout: 15))
+        XCTAssertTrue(join.exists)
+        capture("wifi")
+
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.staticTexts["Home"].waitForExistence(timeout: 5))
+        let check = app.buttons["Check for Update"]
+        for _ in 0..<8 where !(check.exists && check.isHittable) { app.swipeUp() }
+        check.tap()
+        XCTAssertTrue(app.alerts.buttons["Check"].waitForExistence(timeout: 5))
+        capture("firmware-confirm")
+        app.alerts.buttons["Check"].tap()
+        // Like a real BedJet 3, the simulated one restarts to check, and the sheet says so rather than losing it.
+        XCTAssertTrue(app.buttons["Restarting your BedJet to check…"].waitForExistence(timeout: 10))
+        XCTAssertFalse(check.exists)
+        capture("firmware-restarting")
+        XCTAssertTrue(app.staticTexts["Your BedJet's firmware is up to date."].waitForExistence(timeout: 15))
+        XCTAssertTrue(check.exists)
+        capture("firmware")
     }
 }

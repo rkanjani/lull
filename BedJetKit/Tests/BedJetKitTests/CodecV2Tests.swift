@@ -128,6 +128,20 @@ final class CodecV2Tests: XCTestCase {
     }
 
     @MainActor
+    func testClockTimeStepsBecomeDurationsFromNow() async throws {
+        // A V2 only runs steps for a length of time, so one that ends at a time of day is measured from when it's stored.
+        let link = RecordingV2Link()
+        let now = Calendar.current.dateComponents([.hour, .minute], from: Date())
+        let end = ((now.hour ?? 0) * 60 + (now.minute ?? 0) + 90) % 1440
+        let program = StoredProgram(name: "Wake", steps: [
+            ProgramStep(mode: .cool, fanStep: 12, temperature: 44, hours: end / 60, minutes: end % 60, endsAtClockTime: true),
+        ])
+        try await link.store(program, slot: 0)
+        let minutes = Int(link.sent[1][7]) * 60 + Int(link.sent[1][8])
+        XCTAssertTrue((89...90).contains(minutes), "an hour and a half, or a minute less if the clock ticked over: \(minutes)")
+    }
+
+    @MainActor
     func testRefusesModesTheV2Lacks() async {
         let link = RecordingV2Link()
         let program = StoredProgram(name: "Cocoon", steps: [ProgramStep(mode: .extendedHeat, fanStep: 5, temperature: 60, hours: 2, minutes: 0)])

@@ -9,22 +9,23 @@ import android.os.Build
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
 import com.rohankanjani.lull.bedjetkit.BedJetDiscovery
 import com.rohankanjani.lull.bedjetkit.BedJetLink
 import com.rohankanjani.lull.bedjetkit.DemoDiscovery
 import com.rohankanjani.lull.bedjetkit.DemoLink
 import com.rohankanjani.lull.bedjetkit.Generation
 import com.rohankanjani.lull.bedjetkit.LinkState
+import com.rohankanjani.lull.bedjetkit.Mode
 import com.rohankanjani.lull.bedjetkit.NearbyBedJet
 import com.rohankanjani.lull.bedjetkit.StoredProgram
 import com.rohankanjani.lull.widgets.WidgetUpdates
 import com.rohankanjani.lull.widgets.requestTileUpdates
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.UUID
 
@@ -44,6 +45,13 @@ data class LaunchOptions(
     val demoStartsUnchosen: Boolean = false,
     /** Makes the first simulated BedJet never answer, as if it were unplugged. */
     val demoFirstUnitAway: Boolean = false,
+    /**
+     * Starts from the built-in schedules without their wake times. A wake time more than 16 hours away can't be reached,
+     * so a test that starts a night would otherwise pass or fail by the time of day.
+     */
+    val noWakeTimes: Boolean = false,
+    /** Makes the simulated BedJets say newer firmware is available. */
+    val demoFirmwareUpdate: Boolean = false,
 )
 
 /** Where Lull keeps what it saves. UI tests (`ephemeral`) and model tests keep nothing in the app's own place. */
@@ -70,17 +78,21 @@ class Storage(
 }
 
 /**
+ * One for the whole app, kept by [LullApplication], so an errand from the watch finds the same BedJets the screens show.
  * @param makeLink Connects to a BedJet. By default a simulated one in demo mode and Bluetooth otherwise.
  * @param discovery Finds BedJets nearby, given whether demo mode is on.
+ * @param onScreen Whether Lull is on screen as it starts. The watch can start Lull in the background, where it has no
+ *   business holding a BedJet.
  */
 class AppModel(
-    application: Application,
+    val application: Application,
     val options: LaunchOptions,
     val storage: Storage = Storage.app(application, options),
     demoMode: Boolean? = null,
     private val makesLink: ((BedJet) -> BedJetLink)? = null,
     discovery: ((Boolean) -> BedJetDiscovery)? = null,
-) : AndroidViewModel(application) {
+    onScreen: Boolean = true,
+) {
     /**
      * The BedJets this phone was told to use, in the order they were chosen. Each stays connected, so a
      * schedule or setting on one is never disturbed by looking at another.
@@ -116,6 +128,19 @@ class AppModel(
             publishLiveNotifications()
         }
 
+    private var showsTime by mutableStateOf(prefs.getBoolean("remoteTimerShowsTime", false))
+
+    /**
+     * Whether the Remote shows when air turns off as a time of day rather than a duration. It only changes what's shown:
+     * the BedJet counts down either way.
+     */
+    var remoteTimerShowsTime: Boolean
+        get() = showsTime
+        set(value) {
+            showsTime = value
+            prefs.edit().putBoolean("remoteTimerShowsTime", value).apply()
+        }
+
     private var demo by mutableStateOf(demoMode ?: (isEmulator() || prefs.getBoolean("demoMode", false)))
     var demoMode: Boolean
         get() = demo
@@ -136,10 +161,16 @@ class AppModel(
     var wantsNotificationPermission by mutableStateOf(false); private set
 
     /**
+     * Whether Lull is on screen. Off screen it holds no BedJet, so an errand from the watch connects, does what was
+     * asked and lets go again.
+     */
+    var isOnScreen: Boolean = onScreen; private set
+
+    /**
      * Where the screens run what the person asked for. It outlives the screen that asked, as an
      * unstructured Task does on iOS, so a card that disappears mid-save doesn't cancel the save.
      */
-    val scope: CoroutineScope get() = viewModelScope
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val makesDiscovery: (Boolean) -> BedJetDiscovery =
         discovery ?: { demo -> if (demo) DemoDiscovery() else BleDiscovery(application) }
@@ -152,11 +183,18 @@ class AppModel(
     private var retired: Map<String, String> = emptyMap()
     /** Set once the BedJet on screen was forgotten, so the next launch asks rather than picking another. */
     private var needsChoice = false
-
-    override fun onCleared() {
-        for (bedJet in bedJets) bedJet.pause()
-        discovery?.stop()
-    }
+    /**
+     * How many errands from the watch are using each BedJet. Leaving the screen doesn't interrupt them, and the last to
+     * finish lets go of the BedJet.
+     */
+    private val errands = mutableMapOf<String, Int>()
+    /** What went wrong during the errands on each BedJet, for the watch to say. */
+    private val errandReports = mutableMapOf<String, String>()
+    /**
+     * Whether what the widgets show goes to the watch too. Set once loaded, as iOS makes its watch session then:
+     * loading publishes the widgets, and the watch is handed the result once.
+     */
+    private var handsToWatch = false
 
     // BedJets
 
@@ -200,7 +238,7 @@ class AppModel(
         bedJet.pause()
         bedJet.unit?.let { unit ->
             retired = retired + (unit to bedJet.id)
-            if (!bedJet.isDemo) BleLink.forget(getApplication(), unit)
+            if (!bedJet.isDemo) BleLink.forget(application, unit)
         }
         bedJets = bedJets.filter { it !== bedJet }
         if (selectedID == bedJet.id) {
@@ -228,20 +266,225 @@ class AppModel(
     }
 
     fun report(message: String, from: BedJet) {
-        errorMessage = if (hasSeveralBedJets) "${title(from)}: $message" else message
+        val message = attributed(message, from)
+        // Off screen, an alert would wait for the next time Lull is opened; the watch says it now instead. A refresh,
+        // which nothing answers, leaves it for then.
+        if (from.id in errands) {
+            errandReports[from.id] = message
+            if (!isOnScreen) return
+        }
+        errorMessage = message
     }
 
+    /** A message about one BedJet, saying which when there are several. */
+    fun attributed(message: String, to: BedJet): String = if (hasSeveralBedJets) "${title(to)}: $message" else message
+
     fun appMovedToBackground() {
-        for (bedJet in bedJets) bedJet.pause()
+        isOnScreen = false
+        // An errand from the watch lets go of its BedJet itself, once it's done.
+        for (bedJet in bedJets) if (bedJet.id !in errands) bedJet.pause()
         discovery?.stop()
         // A redraw asked for moments after another can be held back, and the BedJet changes in bursts, so the
         // widgets are redrawn once more on leaving, with what Lull last knew.
         publishWidgets(forced = true)
     }
 
+    /** Lull came on screen. A model made on screen is already talking to its BedJets, so nothing is asked again. */
     fun appBecameActive() {
+        if (isOnScreen) return
+        isOnScreen = true
         for (bedJet in bedJets) bedJet.resume(asking = bedJet.id == selectedID)
         if (lookers > 0) discovery?.start()
+    }
+
+    // Tonight and the Remote, for the watch
+
+    /**
+     * Starts tonight on a BedJet, as Start Night on the watch does, once its errand has reached it. A night already
+     * under way, from this phone or another, is left running. Widgets, tiles and shortcuts use `startNight(on:)` with
+     * an ID instead, which only sets a BedJet that's free. Nothing is sent while another command of Lull's is under
+     * way on the BedJet, which this returns false for, so the watch can say so.
+     */
+    suspend fun startNight(on: BedJet): Boolean {
+        if (on.isBusy) return false
+        if (on.run != null || on.runningElsewhereStep != null) return true
+        on.startTonight()
+        return true
+    }
+
+    /**
+     * Sets a BedJet as the watch's Remote asks. Like choosing the mode on the Remote, a schedule running on it ends.
+     * The watch's Remote names what was changed on it, and only that is set: the rest stays as the BedJet has it,
+     * which may have moved on since the watch last heard. Quick Remote buttons use [applyQuickRemote] instead.
+     * Nothing is sent while another command of Lull's is under way on the BedJet, which this returns false for.
+     */
+    suspend fun applyRemote(preset: RemotePreset, to: BedJet, changed: Set<RemoteSetting>? = null): Boolean {
+        if (to.isBusy) return false
+        // A watch can ask for anything, and an older or newer one may not know this BedJet's limits.
+        val preset = preset.clamped
+        // The Remote never offers a mode this kind of BedJet lacks, so a button set up for another kind does nothing.
+        if (preset.mode != Mode.STANDBY && !to.generation.supports(preset.mode)) return true
+        val changes = changed ?: RemoteSetting.entries.toSet()
+        // After the first step, each only while the BedJet is still this phone's, as for a Quick Remote button: one
+        // handed to another phone meanwhile isn't asked back, and one out of reach says so after one wait rather than
+        // one for each setting, which together would outlast the watch's.
+        var stepped = false
+        fun carriesOn(): Boolean {
+            val carries = !stepped || to.isConnected
+            stepped = true
+            return carries
+        }
+        if (RemoteSetting.MODE in changes && carriesOn()) to.setMode(preset.mode)
+        if (preset.mode == Mode.STANDBY) return true
+        if (RemoteSetting.TEMPERATURE in changes && to.adjustsTemperature(preset.mode) && carriesOn()) {
+            to.setTemperature(preset.temperature)
+        }
+        if (RemoteSetting.FAN in changes && preset.mode.usesFan && carriesOn()) to.setFan(preset.fanPercent)
+        // Last: choosing the mode starts it at the longest run the BedJet allows.
+        if (RemoteSetting.TIME in changes && carriesOn()) to.setRuntime(preset.minutes)
+        return true
+    }
+
+    /** Stops using every BedJet, for a model replaced by a fresh one, as a test's new launch does. */
+    fun close() {
+        for (bedJet in bedJets) bedJet.pause()
+        discovery?.stop()
+        scope.cancel()
+    }
+
+    // Errands from the watch
+
+    /**
+     * Does what the watch asked, on the BedJet it names or the one on screen, and says how it went. The watch shows
+     * what Lull hands the widgets, so this hands them what changed. Off screen Lull holds no BedJet, so it connects,
+     * waits to hear what the BedJet is doing, and lets go again once it's done.
+     */
+    suspend fun runErrand(command: WatchCommand): WatchReply {
+        if (command is WatchCommand.Refresh) {
+            refresh()
+            return WatchReply.done
+        }
+        val noBedJet = WatchReply.failed("Choose your BedJet in Lull on your phone first.")
+        val named = command.bedJet
+        val bedJet = (if (named != null) bedJets.firstOrNull { it.id == named } else this.bedJet) ?: return noBedJet
+        beginErrand(bedJet)
+        // Done with the BedJet however the errand ends, once the reply below is read: being done clears what went wrong.
+        // Android can stop the errand's worker partway, which cancels it.
+        try {
+            if (!isOnScreen || !bedJet.isConnected) {
+                val asked = System.currentTimeMillis()
+                bedJet.resume(asking = true)
+                bedJet.awaitReport(asked, timeout = errandPatience)
+            }
+            // Forgotten while the errand waited for it, the BedJet is no longer this phone's to set.
+            if (!uses(bedJet)) return noBedJet
+            // What the connection turned up before the errand's own command, such as a night that ended early, isn't how
+            // the errand went: Lull says it once it's opened, as without the watch.
+            if (errands[bedJet.id] == 1) errandReports.remove(bedJet.id)?.let { errorMessage = it }
+            // Another command of Lull's under way on the BedJet, such as a schedule being saved, leaves it alone: the watch
+            // says so, rather than that it went, so the person can try again.
+            val wasFree = when (command) {
+                is WatchCommand.StartNight -> startNight(bedJet)
+                is WatchCommand.EndNight -> { bedJet.endNight(); true }
+                is WatchCommand.Remote -> applyRemote(command.preset, bedJet, command.changed)
+                WatchCommand.Refresh -> true
+            }
+            if (!wasFree) return WatchReply.failed(WatchMessages.BUSY)
+            if (bedJet.needsSlotChoice) {
+                errandReports[bedJet.id] = "Your BedJet's three slots are full. Open Lull on your phone to pick one to reuse."
+            }
+            return errandReports[bedJet.id]?.let(WatchReply::failed) ?: WatchReply.done
+        } finally {
+            endErrand(bedJet)
+            publishWidgets()
+        }
+    }
+
+    /** Whether a BedJet is still one of this phone's, not forgotten or left behind by a switch to or from demo mode. */
+    private fun uses(bedJet: BedJet): Boolean = bedJets.any { it === bedJet }
+
+    /** Holds on to a BedJet for an errand. The first errand on it starts with nothing gone wrong. */
+    private fun beginErrand(bedJet: BedJet) {
+        if (bedJet.id !in errands) errandReports.remove(bedJet.id)
+        errands[bedJet.id] = (errands[bedJet.id] ?: 0) + 1
+    }
+
+    /**
+     * Done with a BedJet. Off screen, the last errand on it lets it go, so an errand that started later isn't cut off.
+     * One forgotten meanwhile is let go on screen too, since nothing else would.
+     */
+    private fun endErrand(bedJet: BedJet) {
+        val left = (errands[bedJet.id] ?: 1) - 1
+        if (left > 0) {
+            errands[bedJet.id] = left
+            return
+        }
+        errands.remove(bedJet.id)
+        errandReports.remove(bedJet.id)
+        if (!isOnScreen || !uses(bedJet)) bedJet.pause()
+        // One chosen again meanwhile is a new BedJet with the same ID, which leaving the screen skipped for this errand.
+        if (!isOnScreen) bedJets.firstOrNull { it.id == bedJet.id && it !== bedJet }?.pause()
+    }
+
+    /**
+     * Hears what every BedJet is doing now, for a watch that hasn't heard in a while. Off screen, only BedJets no
+     * other phone is using are asked, so a partner's night is never interrupted for a look.
+     */
+    private suspend fun refresh() {
+        val asked = System.currentTimeMillis()
+        val listening = if (isOnScreen) emptyList() else bedJets
+        for (bedJet in listening) {
+            beginErrand(bedJet)
+            bedJet.resume(asking = false)
+        }
+        try {
+            // One wait for them all: each gets what's left of it.
+            val deadline = System.currentTimeMillis() + errandPatience
+            for (bedJet in listening) bedJet.awaitReport(asked, timeout = deadline - System.currentTimeMillis())
+        } finally {
+            for (bedJet in listening) endRefresh(bedJet)
+            publishWidgets()
+        }
+    }
+
+    /**
+     * Done with a BedJet a refresh held. Nothing answers a refresh, so once it's the last errand on the BedJet, what
+     * went wrong, such as a night that ended early, waits in Lull for the next time it's opened, as without the watch.
+     */
+    private fun endRefresh(bedJet: BedJet) {
+        if (errands[bedJet.id] == 1) errandReports[bedJet.id]?.let { errorMessage = it }
+        endErrand(bedJet)
+    }
+
+    // Automations
+
+    /** How long an automation waits off screen for a BedJet that isn't answering before asking to go on in Lull. */
+    var reachPatienceMillis = 10_000L
+
+    /**
+     * Runs an automation on a BedJet. Off screen it is held, like an errand from the watch, only for the action and let
+     * go once it's done, unless Lull came on screen meanwhile and holds it as usual. Nobody may be watching an
+     * automation, so it only reaches a BedJet that is free; `mayAsk`, for an action sent to Lull's screen, asks another
+     * phone for it too.
+     */
+    suspend fun <T> reaching(bedJet: BedJet, mayAsk: Boolean, work: suspend () -> T): T {
+        beginErrand(bedJet)
+        try {
+            if (!isOnScreen) {
+                bedJet.waitUntilLetGo(reachPatienceMillis)
+                if (mayAsk) bedJet.resume(asking = true) else bedJet.reachIfFree(reachPatienceMillis)
+            }
+            // Forgotten while the action waited for it, the BedJet is no longer this phone's to set.
+            if (!uses(bedJet)) throw AutomationError.ForgottenBedJet
+            return work()
+        } finally {
+            // An action throws what goes wrong with it. Anything else said off screen meanwhile, such as the BedJet having
+            // turned off early, waits for Lull to be opened, as it would without the action, rather than going with the
+            // errand. On screen it was shown already. While an errand from the watch also holds the BedJet, that is the
+            // watch's to say.
+            if (!isOnScreen && errands[bedJet.id] == 1) errandReports[bedJet.id]?.let { errorMessage = it }
+            endErrand(bedJet)
+        }
     }
 
     /** Bluetooth access was just granted or refused; look at the radio again. */
@@ -253,12 +496,16 @@ class AppModel(
 
     fun makeLink(bedJet: BedJet): BedJetLink {
         makesLink?.let { return it(bedJet) }
-        if (!bedJet.isDemo) return BleLink(getApplication(), bedJet.unit)
+        if (!bedJet.isDemo) return BleLink(application, bedJet.unit)
         return DemoLink(
             name = bedJet.name ?: DemoLink.DEFAULT_NAME,
-            slots = listOf(StoredProgram("Summer nights", Schedule.templates[2].program.steps), null, null),
+            slots = listOf(StoredProgram("Summer nights", startingSchedules[2].program.steps), null, null),
             scope = scope,
-        ).apply { answers = !(options.demoFirstUnitAway && bedJet.unit == DemoDiscovery.SIMULATED[0].id) }
+            wifiNetwork = bedJet.wifiNetwork,
+        ).apply {
+            answers = !(options.demoFirstUnitAway && bedJet.unit == DemoDiscovery.SIMULATED[0].id)
+            if (options.demoFirmwareUpdate) offerFirmwareUpdate()
+        }
     }
 
     private fun show(fleet: Fleet) {
@@ -269,7 +516,8 @@ class AppModel(
         // Versions that knew several BedJets showed the first until another was picked.
         selectedID = if (needsChoice) null
         else fleet.selected?.let { id -> bedJets.firstOrNull { it.id == id }?.id } ?: bedJets.firstOrNull()?.id
-        for (bedJet in bedJets) bedJet.connect(asking = bedJet.id == selectedID)
+        // Off screen, as when the watch starts Lull, nothing connects, and above all no other phone is asked for its BedJet.
+        for (bedJet in bedJets) bedJet.connect(asking = bedJet.id == selectedID, resuming = isOnScreen)
     }
 
     // From outside the app
@@ -327,9 +575,7 @@ class AppModel(
     /** Keeps a copy of a program made elsewhere, so reusing its slot never loses it. */
     fun keepCopy(program: StoredProgram) {
         val imported = Schedule.importing(program)
-        if (schedules.none { existing -> existing.phases.map { it.step } == imported.phases.map { it.step } }) {
-            schedules = schedules + imported
-        }
+        if (schedules.none { it.matches(imported = imported) }) schedules = schedules + imported
     }
 
     fun save(schedule: Schedule) {
@@ -377,9 +623,13 @@ class AppModel(
 
     private val fleet: Fleet get() = Fleet(bedJets.map { it.saved }, selectedID, retired, needsChoice)
 
+    /** The schedules Lull starts with when it has none saved. */
+    private val startingSchedules: List<Schedule>
+        get() = if (options.noWakeTimes) Schedule.templates.map { it.copy(wakeTime = null) } else Schedule.templates
+
     private fun load() {
         val saved = storage.file("lull.json")?.let { file -> runCatching { json.decodeFromString<Saved>(file.readText()) }.getOrNull() }
-        savedSchedules = saved?.schedules ?: Schedule.templates
+        savedSchedules = saved?.schedules ?: startingSchedules
         otherFleet = (if (demoMode) saved?.fleet else saved?.demoFleet)?.let { checked(it, demo = !demoMode) }
         val fleet = if (demoMode) saved?.demoFleet else saved?.fleet
         show(if (fleet != null) checked(fleet, demo = demoMode) else startingFleet(demoMode, legacy = saved))
@@ -458,7 +708,7 @@ class AppModel(
      */
     fun publishWidgets(forced: Boolean = false) {
         if (!isLoaded || !storage.publishesWidgets) return
-        val context = getApplication<Application>()
+        val context = application
         // Called with every report from a BedJet, so what was last handed over is kept rather than read back.
         val before = publishedWidgets ?: WidgetSnapshot.load(context)
         val bedJet = bedJet
@@ -473,6 +723,7 @@ class AppModel(
         )
         val changed = snapshot != before
         publishedWidgets = snapshot
+        if (changed && handsToWatch) PhoneSession.send(context, snapshot)
         val saved = changed && snapshot.save(context)
         if (!saved && !forced) return
         scope.launch { WidgetUpdates.refresh(context) }
@@ -528,10 +779,15 @@ class AppModel(
     // Last, so every property above is set before anything is loaded or connected.
     init {
         load()
+        handsToWatch = storage.publishesWidgets
+        if (handsToWatch) publishedWidgets?.let { PhoneSession.send(application, it) }
     }
 
     companion object {
-        val json = Json { ignoreUnknownKeys = true }
+        /** How long an errand waits to hear from a BedJet before getting on with it, in milliseconds. Tests wait less. */
+        var errandPatience = 8_000L
+
+        val json get() = lullJson
 
         /** Four characters of the identifier this phone knows the unit by. They never change, unlike names. */
         fun code(unit: String): String = unit.filter { it.isLetterOrDigit() }.take(4).uppercase()

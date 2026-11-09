@@ -1,6 +1,8 @@
 import BedJetKit
 import Foundation
 import Observation
+import UIKit
+import WatchConnectivity
 import WidgetKit
 
 /// Where Lull keeps what it saves. UI tests (`-ephemeral`) and model tests keep nothing in the app's own place.
@@ -36,7 +38,12 @@ final class AppModel {
     private(set) var lookingState: LinkState = .searching
     private var found: [NearbyBedJet] = []
 
-    var schedules: [Schedule] = [] { didSet { save() } }
+    var schedules: [Schedule] = [] {
+        didSet {
+            save()
+            publishShortcutSchedules()
+        }
+    }
 
     var useFahrenheit: Bool {
         didSet {
@@ -44,6 +51,11 @@ final class AppModel {
             publishWidgets()
             publishLiveActivities()
         }
+    }
+    /// Whether the Remote shows when air turns off as a time of day rather than a duration. It only changes what's shown:
+    /// the BedJet counts down either way.
+    var remoteTimerShowsTime: Bool {
+        didSet { storage.defaults.set(remoteTimerShowsTime, forKey: "remoteTimerShowsTime") }
     }
     var demoMode: Bool {
         didSet {
@@ -58,6 +70,10 @@ final class AppModel {
 
     var errorMessage: String?
 
+    /// Whether Lull is on screen. Off screen it holds no BedJet, so an errand from the watch connects, does what was
+    /// asked and lets go again.
+    private(set) var isOnScreen: Bool
+
     @ObservationIgnored let storage: Storage
     @ObservationIgnored private let makesLink: ((BedJet) -> BedJetLink)?
     @ObservationIgnored private let makesDiscovery: (Bool) -> BedJetDiscovery
@@ -65,6 +81,8 @@ final class AppModel {
     @ObservationIgnored private var lookers = 0
     @ObservationIgnored private let liveActivities = LiveActivities()
     @ObservationIgnored private var publishedWidgets: WidgetSnapshot?
+    /// How long an action from Shortcuts waits off screen for a BedJet that isn't answering before asking to go on in Lull.
+    @ObservationIgnored var reachPatience: TimeInterval = 10
     private var isLoaded = false
     /// The BedJets of the mode not in use, kept as they were saved.
     private var otherFleet: Fleet?
@@ -72,23 +90,39 @@ final class AppModel {
     private var retired: [UUID: BedJet.ID] = [:]
     /// Set once the BedJet on screen was forgotten, so the next launch asks rather than picking another.
     private var needsChoice = false
+    /// Hands the watch what the widgets show, and takes its errands.
+    @ObservationIgnored private var watch: PhoneSession?
+    /// How many errands from the watch are using each BedJet. Leaving the screen doesn't interrupt them, and the last
+    /// to finish lets go of the BedJet.
+    @ObservationIgnored private var errands: [BedJet.ID: Int] = [:]
+    /// What went wrong during the errands on each BedJet, for the watch to say.
+    @ObservationIgnored private var errandReports: [BedJet.ID: String] = [:]
 
     /// - Parameters:
     ///   - makeLink: Connects to a BedJet. By default a simulated one in demo mode and Bluetooth otherwise.
     ///   - discovery: Finds BedJets nearby, given whether demo mode is on.
+    ///   - onScreen: Whether Lull is on screen as it starts. By default, whether iOS launched it in the foreground: the
+    ///     watch can wake it in the background, where it has no business holding a BedJet.
     init(storage: Storage = .app, demoMode: Bool? = nil, makeLink: ((BedJet) -> BedJetLink)? = nil,
-         discovery: ((Bool) -> BedJetDiscovery)? = nil) {
+         discovery: ((Bool) -> BedJetDiscovery)? = nil, onScreen: Bool? = nil) {
         self.storage = storage
         makesLink = makeLink
         makesDiscovery = discovery ?? { demo in demo ? DemoDiscovery() as BedJetDiscovery : BLEDiscovery() }
         let defaults = storage.defaults
         useFahrenheit = defaults.object(forKey: "useFahrenheit") as? Bool ?? (Locale.current.measurementSystem == .us)
+        remoteTimerShowsTime = defaults.bool(forKey: "remoteTimerShowsTime")
         #if targetEnvironment(simulator)
         self.demoMode = demoMode ?? true
         #else
         self.demoMode = demoMode ?? defaults.bool(forKey: "demoMode")
         #endif
+        isOnScreen = onScreen ?? (UIApplication.shared.applicationState != .background)
         load()
+        if storage.publishesWidgets, WCSession.isSupported() {
+            let watch = PhoneSession(model: self)
+            if let publishedWidgets { watch.send(publishedWidgets) }
+            self.watch = watch
+        }
     }
 
     // MARK: BedJets
@@ -155,28 +189,253 @@ final class AppModel {
     static func code(of unit: UUID) -> String { String(unit.uuidString.prefix(4)) }
 
     func report(_ message: String, from bedJet: BedJet) {
-        errorMessage = hasSeveralBedJets ? "\(title(of: bedJet)): \(message)" : message
+        let message = attributed(message, to: bedJet)
+        // Off screen, an alert would wait for the next time Lull is opened; the watch says it now instead. A refresh,
+        // which nothing answers, leaves it for then.
+        if errands[bedJet.id] != nil {
+            errandReports[bedJet.id] = message
+            guard isOnScreen else { return }
+        }
+        errorMessage = message
+    }
+
+    /// A message about one BedJet, saying which when there are several.
+    func attributed(_ message: String, to bedJet: BedJet) -> String {
+        hasSeveralBedJets ? "\(title(of: bedJet)): \(message)" : message
     }
 
     func appMovedToBackground() {
-        for bedJet in bedJets { bedJet.pause() }
+        isOnScreen = false
+        publishShortcutSchedules()
+        // An errand from the watch lets go of its BedJet itself, once it's done.
+        for bedJet in bedJets where errands[bedJet.id] == nil { bedJet.pause() }
         discovery?.stop()
         // iOS can hold back a redraw asked for moments after another, and the BedJet changes in bursts, so the widgets
         // are redrawn once more on leaving, with what Lull last knew.
         publishWidgets(forced: true)
     }
 
+    /// Lull came on screen. A model made on screen is already talking to its BedJets, and coming back from Notification
+    /// Center never left it, so nothing is asked again.
     func appBecameActive() {
+        guard !isOnScreen else { return }
+        isOnScreen = true
         for bedJet in bedJets { bedJet.resume(asking: bedJet.id == selectedID) }
         if lookers > 0 { discovery?.start() }
+        publishShortcutSchedules()
+    }
+
+    /// So Siri and the Shortcuts app know the schedules "Start … in Lull" can name. Not while loading: the model isn't yet
+    /// registered for the queries this sets off, so LullApp does it once it is. iOS can drop that one when Lull has just
+    /// been installed or updated, leaving Shortcuts without a tile for each schedule, so it goes again as Lull comes on
+    /// and leaves the screen.
+    private func publishShortcutSchedules() {
+        guard isLoaded, storage.publishesWidgets else { return }
+        LullShortcuts.updateAppShortcutParameters()
+    }
+
+    // MARK: Tonight and the Remote, for the watch
+
+    /// Starts tonight on a BedJet, as Start Night on the watch does, once its errand has reached it. A night already
+    /// under way, from this phone or another, is left running. Widgets, controls and Siri use `startNight(on:)` with
+    /// an ID instead, which only sets a BedJet that's free. Nothing is sent while another command of Lull's is under
+    /// way on the BedJet, which this returns false for, so the watch can say so.
+    @discardableResult
+    func startNight(on bedJet: BedJet) async -> Bool {
+        guard !bedJet.isBusy else { return false }
+        guard bedJet.run == nil, bedJet.runningElsewhereStep == nil else { return true }
+        await bedJet.startTonight()
+        return true
+    }
+
+    /// Sets a BedJet as the watch's Remote asks. Like choosing the mode on the Remote, a schedule running on it ends.
+    /// The watch's Remote names what was changed on it, and only that is set: the rest stays as the BedJet has it,
+    /// which may have moved on since the watch last heard. Quick Remote buttons use `applyQuickRemote` instead.
+    /// Nothing is sent while another command of Lull's is under way on the BedJet, which this returns false for.
+    @discardableResult
+    func applyRemote(_ preset: RemotePreset, to bedJet: BedJet, changed: Set<RemoteSetting>? = nil) async -> Bool {
+        guard !bedJet.isBusy else { return false }
+        // A watch can ask for anything, and an older or newer one may not know this BedJet's limits.
+        let preset = preset.clamped
+        // The Remote never offers a mode this kind of BedJet lacks, so a button set up for another kind does nothing.
+        guard preset.mode == .standby || bedJet.generation.supports(preset.mode) else { return true }
+        let changes = changed ?? Set(RemoteSetting.allCases)
+        // After the first step, each only while the BedJet is still this phone's, as for a Quick Remote button: one
+        // handed to another phone meanwhile isn't asked back, and one out of reach says so after one wait rather than
+        // one for each setting, which together would outlast the watch's.
+        var stepped = false
+        func carriesOn() -> Bool {
+            let carries = !stepped || bedJet.isConnected
+            stepped = true
+            return carries
+        }
+        if changes.contains(.mode), carriesOn() { await bedJet.setMode(preset.mode) }
+        guard preset.mode != .standby else { return true }
+        if changes.contains(.temperature), bedJet.adjustsTemperature(preset.mode), carriesOn() {
+            await bedJet.setTemperature(preset.temperature)
+        }
+        if changes.contains(.fan), preset.mode.usesFan, carriesOn() { await bedJet.setFan(percent: preset.fanPercent) }
+        // Last: choosing the mode starts it at the longest run the BedJet allows.
+        if changes.contains(.time), carriesOn() { await bedJet.setRuntime(minutes: preset.minutes) }
+        return true
+    }
+
+    // MARK: Errands from the watch
+
+    /// Does what the watch asked, on the BedJet it names or the one on screen, and says how it went. The watch shows
+    /// what Lull hands the widgets, so this hands them what changed. Off screen Lull holds no BedJet, so it connects,
+    /// waits to hear what the BedJet is doing, and lets go again once it's done.
+    func runErrand(_ command: WatchCommand) async -> WatchReply {
+        if case .refresh = command {
+            await refresh()
+            return .done
+        }
+        let noBedJet = WatchReply.failed("Choose your BedJet in Lull on your iPhone first.")
+        guard let bedJet = command.bedJet.map({ id in bedJets.first { $0.id == id } }) ?? self.bedJet else {
+            return noBedJet
+        }
+        beginErrand(on: bedJet)
+        // Done with the BedJet however the errand ends, once the reply below is read: being done clears what went wrong.
+        defer {
+            endErrand(on: bedJet)
+            publishWidgets()
+        }
+        if !isOnScreen || !bedJet.isConnected {
+            let asked = Date()
+            bedJet.resume(asking: true)
+            await bedJet.awaitReport(since: asked, timeout: Self.errandPatience)
+        }
+        // Forgotten while the errand waited for it, the BedJet is no longer this phone's to set.
+        guard uses(bedJet) else { return noBedJet }
+        // Out of background time while it waited, the errand was cancelled and Lull let go of the BedJet, which it doesn't
+        // take back for an errand the watch has given up on, as on Android, where the errand's work is stopped.
+        guard !Task.isCancelled else { return .failed(WatchMessages.tooLate) }
+        // What the connection turned up before the errand's own command, such as a night that ended early, isn't how the
+        // errand went: Lull says it once it's opened, as without the watch.
+        if errands[bedJet.id] == 1, let found = errandReports.removeValue(forKey: bedJet.id) { errorMessage = found }
+        // Another command of Lull's under way on the BedJet, such as a schedule being saved, leaves it alone: the watch says
+        // so, rather than that it went, so the person can try again.
+        var wasFree = true
+        switch command {
+        case .startNight: wasFree = await startNight(on: bedJet)
+        case .endNight: await bedJet.endNight()
+        case let .remote(preset, _, changed): wasFree = await applyRemote(preset, to: bedJet, changed: changed)
+        case .refresh: break
+        }
+        // Cancelled partway, the errand sent nothing more, so the watch hears it ran out of time rather than that it went.
+        guard !Task.isCancelled else { return .failed(WatchMessages.tooLate) }
+        guard wasFree else { return .failed(WatchMessages.busy) }
+        if bedJet.needsSlotChoice {
+            errandReports[bedJet.id] = "Your BedJet's three slots are full. Open Lull on your iPhone to pick one to reuse."
+        }
+        return errandReports[bedJet.id].map(WatchReply.failed) ?? .done
+    }
+
+    /// Whether a BedJet is still one of this phone's, not forgotten or left behind by a switch to or from demo mode.
+    private func uses(_ bedJet: BedJet) -> Bool { bedJets.contains { $0 === bedJet } }
+
+    /// Holds on to a BedJet for an errand. The first errand on it starts with nothing gone wrong.
+    private func beginErrand(on bedJet: BedJet) {
+        if errands[bedJet.id] == nil { errandReports[bedJet.id] = nil }
+        errands[bedJet.id, default: 0] += 1
+    }
+
+    /// Done with a BedJet. Off screen, the last errand on it lets it go, so an errand that started later isn't cut off.
+    /// One forgotten meanwhile is let go on screen too, since nothing else would.
+    private func endErrand(on bedJet: BedJet) {
+        let left = (errands[bedJet.id] ?? 1) - 1
+        errands[bedJet.id] = left > 0 ? left : nil
+        guard left <= 0 else { return }
+        errandReports[bedJet.id] = nil
+        if !isOnScreen || !uses(bedJet) { bedJet.pause() }
+        // One chosen again meanwhile is a new BedJet with the same ID, which leaving the screen skipped for this errand.
+        if !isOnScreen, let current = bedJets.first(where: { $0.id == bedJet.id }), current !== bedJet { current.pause() }
+    }
+
+    /// Lets go of every BedJet an errand from the watch holds, when iOS is about to suspend Lull before the errands are
+    /// done and they're cancelled, rather than the BedJet staying held by a phone that can't answer for it until a
+    /// command in flight gives up.
+    func letGoOfErrands() {
+        for bedJet in bedJets where errands[bedJet.id] != nil { bedJet.pause() }
+    }
+
+    /// How long an errand waits to hear from a BedJet before getting on with it. Tests wait less.
+    static var errandPatience: TimeInterval = 8
+
+    /// Hears what every BedJet is doing now, for a watch that hasn't heard in a while. Off screen, only BedJets no
+    /// other phone is using are asked, so a partner's night is never interrupted for a look.
+    private func refresh() async {
+        let asked = Date()
+        let listening = isOnScreen ? [] : bedJets
+        for bedJet in listening {
+            beginErrand(on: bedJet)
+            bedJet.resume(asking: false)
+        }
+        defer {
+            for bedJet in listening { endRefresh(on: bedJet) }
+            publishWidgets()
+        }
+        // One wait for them all: each gets what's left of it.
+        let deadline = Date().addingTimeInterval(Self.errandPatience)
+        for bedJet in listening { await bedJet.awaitReport(since: asked, timeout: deadline.timeIntervalSinceNow) }
+    }
+
+    /// Done with a BedJet a refresh held. Nothing answers a refresh, so once it's the last errand on the BedJet, what
+    /// went wrong, such as a night that ended early, waits in Lull for the next time it's opened, as without the watch.
+    private func endRefresh(on bedJet: BedJet) {
+        if errands[bedJet.id] == 1, let report = errandReports[bedJet.id] { errorMessage = report }
+        endErrand(on: bedJet)
+    }
+
+    // MARK: Actions from Shortcuts
+
+    /// Runs an action from Shortcuts on a BedJet. Off screen it is held, like an errand from the watch, only for the
+    /// action and let go once it's done, unless Lull came on screen meanwhile and holds it as usual. Nobody may be
+    /// watching an automation, so it only reaches a BedJet that is free; `mayAsk`, for an action that went on in Lull,
+    /// asks another phone for it too.
+    func reaching<Result: Sendable>(_ bedJet: BedJet, mayAsk: Bool,
+                                    _ work: @escaping () async throws -> Result) async throws -> Result {
+        // Even an action started on screen may finish off it, since leaving the screen leaves its BedJet to it. Should iOS
+        // say time's up first, the action is cancelled and lets go of its BedJet, as Android's is when its work is stopped,
+        // so nothing it was partway through goes on whenever Lull next runs, which could be hours later.
+        let action = Task { try await self.reach(bedJet, mayAsk: mayAsk, work) }
+        let background = BackgroundTime("Action from Shortcuts") {
+            action.cancel()
+            bedJet.pause()
+        }
+        defer { background.end() }
+        // Shortcuts cancelling the action cancels it all the same.
+        return try await withTaskCancellationHandler { try await action.value } onCancel: { action.cancel() }
+    }
+
+    /// The action itself, run while Lull is kept going for it.
+    private func reach<Result>(_ bedJet: BedJet, mayAsk: Bool, _ work: () async throws -> Result) async throws -> Result {
+        beginErrand(on: bedJet)
+        defer {
+            // An action throws what goes wrong with it. Anything else said off screen meanwhile, such as the BedJet having
+            // turned off early, waits for Lull to be opened, as it would without the action, rather than going with the
+            // errand. On screen it was shown already. While an errand from the watch also holds the BedJet, that is the
+            // watch's to say.
+            if !isOnScreen, errands[bedJet.id] == 1, let said = errandReports[bedJet.id] { errorMessage = said }
+            endErrand(on: bedJet)
+        }
+        if !isOnScreen {
+            try await bedJet.waitUntilLetGo(within: reachPatience)
+            if mayAsk { bedJet.resume(asking: true) } else { try await bedJet.reachIfFree(within: reachPatience) }
+        }
+        // Forgotten while the action waited for it, the BedJet is no longer this phone's to set.
+        guard uses(bedJet) else { throw AutomationError.forgottenBedJet }
+        return try await work()
     }
 
     func makeLink(for bedJet: BedJet) -> BedJetLink {
         if let makesLink { return makesLink(bedJet) }
         guard bedJet.isDemo else { return BLELink(unit: bedJet.unit) }
         let demo = DemoLink(name: bedJet.name ?? DemoLink.defaultName,
-                            slots: [StoredProgram(name: "Summer nights", steps: Schedule.templates[2].program.steps), nil, nil])
+                            slots: [StoredProgram(name: "Summer nights", steps: Self.startingSchedules[2].program.steps), nil, nil],
+                            wifiNetwork: bedJet.wifiNetwork)
         demo.answers = !(Self.demoFirstUnitAway && bedJet.unit == DemoDiscovery.simulated[0].id)
+        if Self.demoOffersFirmwareUpdate { demo.offerFirmwareUpdate() }
         return demo
     }
 
@@ -187,7 +446,8 @@ final class AppModel {
         bedJets = fleet.bedJets.map { BedJet($0, isDemo: demoMode, app: self) }
         // Versions that knew several BedJets showed the first until another was picked.
         selectedID = needsChoice ? nil : fleet.selected.flatMap { id in bedJets.first { $0.id == id }?.id } ?? bedJets.first?.id
-        for bedJet in bedJets { bedJet.connect(asking: bedJet.id == selectedID) }
+        // Off screen, as when the watch wakes Lull, nothing connects, and above all no other phone is asked for its BedJet.
+        for bedJet in bedJets { bedJet.connect(asking: bedJet.id == selectedID, resuming: isOnScreen) }
     }
 
     // MARK: From outside the app
@@ -245,7 +505,7 @@ final class AppModel {
     /// Keeps a copy of a program made elsewhere, so reusing its slot never loses it.
     func keepCopy(of program: StoredProgram) {
         let imported = Schedule(importing: program)
-        if !schedules.contains(where: { $0.phases.map(\.step) == imported.phases.map(\.step) }) {
+        if !schedules.contains(where: { $0.matches(imported: imported) }) {
             schedules.append(imported)
         }
     }
@@ -310,10 +570,22 @@ final class AppModel {
     static let demoStartsUnchosen = ProcessInfo.processInfo.arguments.contains("-demoChoose")
     /// Launching with `-demoFirstUnitAway` makes the first simulated BedJet never answer, as if it were unplugged.
     static let demoFirstUnitAway = ProcessInfo.processInfo.arguments.contains("-demoFirstUnitAway")
+    /// Launching with `-noWakeTimes` starts from the built-in schedules without their wake times. A wake time more than
+    /// 16 hours away can't be reached, so a test that starts a night would otherwise pass or fail by the time of day.
+    /// Model tests set it themselves.
+    static var startsWithoutWakeTimes = ProcessInfo.processInfo.arguments.contains("-noWakeTimes")
+
+    /// The schedules Lull starts with when it has none saved.
+    static var startingSchedules: [Schedule] {
+        guard startsWithoutWakeTimes else { return Schedule.templates }
+        return Schedule.templates.map { var schedule = $0; schedule.wakeTime = nil; return schedule }
+    }
+    /// Launching with `-demoFirmwareUpdate` makes the simulated BedJets say newer firmware is available.
+    static let demoOffersFirmwareUpdate = ProcessInfo.processInfo.arguments.contains("-demoFirmwareUpdate")
 
     private func load() {
         let saved = storage.file("lull.json").flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(Saved.self, from: $0) }
-        schedules = saved?.schedules ?? Schedule.templates
+        schedules = saved?.schedules ?? Self.startingSchedules
         otherFleet = (demoMode ? saved?.fleet : saved?.demoFleet).map { checked($0, demo: !demoMode) }
         if let fleet = demoMode ? saved?.demoFleet : saved?.fleet {
             show(checked(fleet, demo: demoMode))
@@ -393,6 +665,7 @@ final class AppModel {
         )
         let changed = snapshot != before
         publishedWidgets = snapshot
+        if changed { watch?.send(snapshot) }
         let saved = changed && snapshot.save()
         guard saved || forced else { return }
         WidgetCenter.shared.reloadAllTimelines()
@@ -432,5 +705,43 @@ final class AppModel {
             }
         }
         liveActivities.show(wanted, useFahrenheit: useFahrenheit)
+    }
+}
+
+/// Keeps iOS from suspending Lull while it finishes work off screen. Should the time run out first, `onExpiry` lets go of
+/// what the work holds, so the work fails rather than leaving a BedJet held by a phone iOS is about to suspend.
+@MainActor
+final class BackgroundTime {
+    private var task = UIBackgroundTaskIdentifier.invalid
+    private let onExpiry: @MainActor () -> Void
+    /// Every one not yet ended, for `runOut()`.
+    private static var running: [ObjectIdentifier: BackgroundTime] = [:]
+
+    init(_ name: String, onExpiry: @escaping @MainActor () -> Void) {
+        self.onExpiry = onExpiry
+        // Held by the handler until the task ends, so it can always end it, even if the caller let go of it first.
+        task = UIApplication.shared.beginBackgroundTask(withName: name) {
+            // iOS calls this on the main thread.
+            MainActor.assumeIsolated { self.expire() }
+        }
+        Self.running[ObjectIdentifier(self)] = self
+    }
+
+    func end() {
+        Self.running[ObjectIdentifier(self)] = nil
+        guard task != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(task)
+        task = .invalid
+    }
+
+    /// Runs out of time for everything Lull is finishing off screen at once, as iOS does just before it suspends Lull.
+    /// Tests use it, since they can't make iOS do so.
+    static func runOut() {
+        for time in Array(running.values) { time.expire() }
+    }
+
+    private func expire() {
+        onExpiry()
+        end()
     }
 }

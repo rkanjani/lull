@@ -1,7 +1,5 @@
-Lull for Android is here.
+Keep your BedJet 3 up to date without the official app.
 
-• Plan the whole night as phases and save it to your BedJet 3 or BedJet V2, which runs it while your phone sleeps.
-• Use the Remote for cool, heat, turbo and more, with fan, temperature and a shut-off timer.
-• History shows what your BedJet did each night and every change you made.
-• One on each side of the bed? Add both BedJets and switch between them.
-• Works with TalkBack and the largest text sizes.
+• Check for a firmware update from the BedJet sheet. Your BedJet downloads it over its own Wi-Fi and installs it, and Lull tells you when it's back on the new version.
+• When your BedJet says newer firmware is available, Lull offers it once the air is off.
+• Give your BedJet 3 the Wi-Fi network it uses for updates, by name. Lull remembers the name, never the password, and still never asks for your location.
