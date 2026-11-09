@@ -382,17 +382,63 @@ final class WatchErrandTests: XCTestCase {
         let model = launch(onScreen: false)
         let bedJet = try XCTUnwrap(model.bedJet)
         // As over Bluetooth, the BedJet says what it's doing a moment after it connects, once the action waits to hear it.
-        // That wait isn't a command under way, so the early end is recorded and said, as for an errand.
+        // That wait is under way, but the action isn't ending the night, so the early end is recorded and said.
         let link = unit(mine.id)
         link.reports = false
         let action = Task { try await model.perform(.lightRing(on: true), on: bedJet) }
         try await waitUntil("the BedJet to connect") { bedJet.isConnected }
         try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertTrue(bedJet.isBusy)
         link.reports = true
 
         _ = try await action.value
         XCTAssertNil(bedJet.run)
         XCTAssertTrue(bedJet.history.contains { if case .scheduleEnded = $0.event { true } else { false } })
         XCTAssertTrue(model.errorMessage?.hasPrefix("Your BedJet turned off") == true)
+    }
+
+    func testANightThatEndedIsNotedWhenTheRemoteIsUsedAsLullConnects() async throws {
+        // Started from this phone an hour ago, and ended early by the BedJet since.
+        let night = ActiveRun(schedule: AppModel.startingSchedules[0], startedAt: Date().addingTimeInterval(-3600))
+        try save(SavedBedJet(unit: mine.id, name: mine.name, generation: .v3, run: night))
+        let link = unit(mine.id)
+        link.reports = false
+        let model = launch()
+        let bedJet = try XCTUnwrap(model.bedJet)
+        try await waitUntil("the BedJet to connect") { bedJet.isConnected }
+        // The fan is changed the moment Lull is opened, and the BedJet's first report arrives while that's under way.
+        link.holdsSends = true
+        let change = Task { await bedJet.setFan(percent: 60) }
+        try await waitUntil("the fan change to be in flight") { link.isHolding }
+        link.reports = true
+        try await waitUntil("the BedJet to report") { bedJet.run == nil }
+        link.release()
+        await change.value
+
+        XCTAssertTrue(bedJet.history.contains { if case .scheduleEnded(_, .early) = $0.event { true } else { false } })
+        XCTAssertTrue(model.errorMessage?.hasPrefix("Your BedJet turned off") == true)
+    }
+
+    func testANightLullEndsIsNotedOnceThoughTheBedJetSaysSoFirst() async throws {
+        // Started from this phone an hour ago, and still running as far as Lull knows.
+        let night = ActiveRun(schedule: AppModel.startingSchedules[0], startedAt: Date().addingTimeInterval(-3600))
+        try save(SavedBedJet(unit: mine.id, name: mine.name, generation: .v3, run: night))
+        let link = unit(mine.id)
+        link.reports = false
+        let model = launch()
+        let bedJet = try XCTUnwrap(model.bedJet)
+        try await waitUntil("the BedJet to connect") { bedJet.isConnected && link.lastStatus != nil }
+        link.holdsSends = true
+        let ending = Task { await bedJet.endNight() }
+        try await waitUntil("End Night to be in flight") { link.isHolding }
+        // The BedJet's report that the schedule stopped arrives before the command returns.
+        link.report(try XCTUnwrap(link.lastStatus))
+        XCTAssertNil(bedJet.run)
+        link.release()
+        await ending.value
+
+        let ends = bedJet.history.compactMap { if case let .scheduleEnded(_, ending) = $0.event { ending } else { nil } }
+        XCTAssertEqual(ends, [.byYou])
+        XCTAssertNil(model.errorMessage)
     }
 }

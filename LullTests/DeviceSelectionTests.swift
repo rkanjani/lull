@@ -995,7 +995,7 @@ final class DeviceSelectionTests: XCTestCase {
         let (model, bedJet) = try await backgrounded(mine)
         let link = unit(mine.id)
         let sentBefore = link.sent
-        // Another phone takes the BedJet while the action waits for its first report.
+        // Another phone gets the BedJet anyway while the action waits for its first report, as when the connection drops.
         link.reports = false
         let action = Task { try await model.perform(.lightRing(on: true), on: bedJet) }
         try await waitUntil("the BedJet to connect") { bedJet.isConnected }
@@ -1086,6 +1086,65 @@ final class DeviceSelectionTests: XCTestCase {
         // Only the temperature in flight went out: the fan never did, long after Shortcuts gave up on it.
         XCTAssertEqual(link.sent.count, sent + 1)
         XCTAssertNotEqual(link.lastStatus?.fanPercent, 60)
+    }
+
+    func testNothingElseStartsANightWhileAnActionWaitsForTheBedJet() async throws {
+        let (model, bedJet) = try await backgrounded(mine)
+        let link = unit(mine.id)
+        link.reports = false
+        let action = Task { try await model.perform(.startNight(schedule: nil), on: bedJet) }
+        try await waitUntil("the BedJet to connect") { bedJet.isConnected }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        // The watch asks for Start Night while the action waits to hear from the BedJet.
+        await model.startNight(on: bedJet)
+        XCTAssertNil(bedJet.run)
+        link.reports = true
+
+        let done = try await action.value
+        XCTAssertTrue(done.hasPrefix("Started"), done)
+        XCTAssertEqual(bedJet.history.filter { if case .scheduleStarted = $0.event { true } else { false } }.count, 1)
+    }
+
+    func testAnActionsStartNightLeavesTheOneLullIsStarting() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        let link = unit(mine.id)
+        // Start Night in Lull is still writing tonight's schedule when an action asks for a night too.
+        link.holdsSends = true
+        let tapped = Task { await bedJet.startTonight() }
+        try await waitUntil("Start Night to be in flight") { link.isHolding }
+        let action = Task { try await model.perform(.startNight(schedule: nil), on: bedJet) }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        link.release()
+        await tapped.value
+
+        let done = try await action.value
+        let running = try XCTUnwrap(bedJet.run)
+        XCTAssertEqual(done, "“\(running.schedule.name)” is already running on BEDJET_3.")
+        XCTAssertEqual(bedJet.history.filter { if case .scheduleStarted = $0.event { true } else { false } }.count, 1)
+    }
+
+    func testATurnOffActionEndsTheNightLullIsStarting() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        let link = unit(mine.id)
+        // Start Night in Lull is still writing tonight's schedule when an action turns the BedJet off.
+        link.holdsSends = true
+        let tapped = Task { await bedJet.startTonight() }
+        try await waitUntil("Start Night to be in flight") { link.isHolding }
+        let name = try XCTUnwrap(bedJet.tonight).name
+        let action = Task { try await model.perform(.turnOff, on: bedJet) }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        link.release()
+        await tapped.value
+
+        let done = try await action.value
+        XCTAssertEqual(done, "Ended “\(name)” on BEDJET_3.")
+        XCTAssertNil(bedJet.run)
+        // The BedJet itself isn't left running the night.
+        XCTAssertEqual(link.device.programStep, 0)
     }
 
     func testComingOnScreenDuringAnActionKeepsTheBedJet() async throws {

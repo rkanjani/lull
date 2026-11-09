@@ -148,6 +148,8 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     /** Commands under way. More than one can be, such as a Remote change while an automation runs. */
     private var commandsUnderWay by mutableIntStateOf(0)
     val isBusy: Boolean get() = commandsUnderWay > 0
+    /** Commands under way that end the night, which then record it as ended by the person ([endingTheNight]). */
+    private var nightsBeingEnded = 0
     /**
      * Set as Lull lets go of a connected BedJet, until the link says it has. Over Bluetooth that takes a moment, and until
      * then the link still says it's ready, though nothing sent on it arrives.
@@ -409,7 +411,9 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         // Lull lets go of the BedJet overnight, so it only learns about an early stop on the next connection.
         // Nothing on this phone asked for it, so say so and keep the unit's reason code for diagnosis.
         val minutesEarly = ((run.endsAt - now) / 60_000).toInt()
-        if (isBusy) return
+        // Lull ending the night records that itself. Any other command under way, such as an action's or a Remote change
+        // made as Lull connects, leaves the night to end as the BedJet says.
+        if (nightsBeingEnded > 0) return
         if (minutesEarly > 2) {
             record(HistoryEntry.Event.ScheduleEnded(run.schedule.name, HistoryEntry.Ending.Early(minutesEarly)), noticedLater = isJustConnected)
         } else {
@@ -437,7 +441,8 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
 
     suspend fun startTonight() {
         val schedule = tonight ?: return
-        if (link == null) return
+        // One night at a time: a schedule already being written, as by an action, isn't written over.
+        if (link == null || isSavingSchedule) return
         isSavingSchedule = true
         try {
             perform { startSchedule(schedule, choosingSlot = true) }
@@ -517,7 +522,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     private suspend fun stopNight() {
         val link = connectedLink()
         val name = run?.schedule?.name
-        link.setMode(Mode.STANDBY)
+        endingTheNight { link.setMode(Mode.STANDBY) }
         run = null
         forgetRemoteTimer()
         record(HistoryEntry.Event.ScheduleEnded(name, HistoryEntry.Ending.ByYou))
@@ -564,7 +569,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         val endingSchedule = run?.schedule?.name
         // Until the new mode is given its own run, a fan or temperature change leaves the timer alone.
         forgetRemoteTimer()
-        link.setMode(mode)
+        endingTheNight { link.setMode(mode) }
         // The BedJet only says it's off in its next report, and Lull may have let go of it by then, leaving it shown
         // as running outside Lull. The BedJet took the command, so it is off already; setting `run` publishes it.
         if (mode == Mode.STANDBY) status = status?.copy(mode = Mode.STANDBY)
@@ -778,6 +783,19 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         } finally {
             commandsUnderWay -= 1
             lastCommandAt = System.currentTimeMillis()
+        }
+    }
+
+    /**
+     * Sends what ends any night running. The BedJet's report that its schedule stopped can arrive before the command
+     * returns; that is this command's doing, which the caller records as ended by the person, not an early stop.
+     */
+    private suspend fun endingTheNight(send: suspend () -> Unit) {
+        nightsBeingEnded += 1
+        try {
+            send()
+        } finally {
+            nightsBeingEnded -= 1
         }
     }
 
@@ -1134,15 +1152,19 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
      * setup's or the update's, so it is refused while the BedJet uses its Wi-Fi ([isUsingWiFi]), as the controls are.
      * That is checked once the BedJet has reported, since one may have started while the action was reaching it, or on
      * another phone, and none starts after. Once the BedJet is installing and away, the action finds it unreachable as
-     * usual, and an update that finished while Lull was closed doesn't hold it up.
+     * usual, and an update that finished while Lull was closed doesn't hold it up. A schedule Lull is writing finishes first.
      */
     private suspend fun <T> carryOutAction(work: suspend () -> T): T {
-        // Not yet under way while it waits: the first report since connecting can end a night that ran out or stopped
-        // early while Lull was closed, which is only recorded while no command of Lull's is under way. Control is taken only
-        // here: should the BedJet go to another phone during the wait, the action fails rather than asking for it back.
-        takeControl()
-        awaitStatus()
+        // Under way from the start, so while the action waits for the BedJet nothing else on this phone starts a night or
+        // sets it, and it isn't handed to another phone. Control is taken only here: should the BedJet go to another phone
+        // anyway, the action fails rather than asking for it back.
         return underWay {
+            takeControl()
+            awaitStatus()
+            // A night Lull is already starting, from its Start Night button or the watch, goes first, and is then the one
+            // running: sent in among its steps, another schedule could leave the BedJet with parts of both, and Off could
+            // come before the night it meant to end.
+            while (isSavingSchedule) delay(100)
             if (isUsingWiFi) throw AutomationError.Updating
             work()
         }
@@ -1288,8 +1310,8 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         val wasAway = before.at < connectedAt && isJustConnected
         when {
             before.programStep == 0 && now.programStep >= 1 -> {
-                // Started from this phone, it is recorded once the BedJet confirms it.
-                if (run == null && !isBusy) record(HistoryEntry.Event.ScheduleStarted(null, null), noticedLater = wasAway)
+                // Started from this phone, while its schedule is saved, it is recorded once the BedJet confirms it.
+                if (run == null && !isSavingSchedule) record(HistoryEntry.Event.ScheduleStarted(null, null), noticedLater = wasAway)
                 return
             }
             // The schedule moved on to its next phase, or ended; its start and end are recorded on their own.

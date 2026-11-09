@@ -1146,7 +1146,7 @@ class DeviceSelectionTest {
         val (model, bedJet) = backgrounded(mine)
         val link = unit(mine.id)
         val sentBefore = link.sent.toList()
-        // Another phone takes the BedJet while the action waits for its first report.
+        // Another phone gets the BedJet anyway while the action waits for its first report, as when the connection drops.
         link.reports = false
         val action = async { runCatching { model.perform(AutomationRequest.LightRing(on = true), bedJet) } }
         waitUntil("the BedJet to connect") { bedJet.isConnected }
@@ -1230,6 +1230,67 @@ class DeviceSelectionTest {
         // out, long after the automation app gave up on it.
         assertEquals(sent, link.sent.size)
         assertNotEquals(60, link.lastStatus?.fanPercent)
+    }
+
+    @Test
+    fun nothingElseStartsANightWhileAnActionWaitsForTheBedJet() = onMain {
+        val (model, bedJet) = backgrounded(mine)
+        val link = unit(mine.id)
+        link.reports = false
+        val action = async { model.perform(AutomationRequest.StartNight(null), bedJet) }
+        waitUntil("the BedJet to connect") { bedJet.isConnected }
+        delay(300)
+        // The watch asks for Start Night while the action waits to hear from the BedJet.
+        model.startNight(on = bedJet)
+        assertNull(bedJet.run)
+        link.reports = true
+
+        val done = action.await()
+        assertTrue(done, done.startsWith("Started"))
+        assertEquals(1, bedJet.history.count { it.event is HistoryEntry.Event.ScheduleStarted })
+    }
+
+    @Test
+    fun anActionsStartNightLeavesTheOneLullIsStarting() = onMain {
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        val link = unit(mine.id)
+        // Start Night in Lull is still writing tonight's schedule when an action asks for a night too.
+        link.holdsSends = true
+        val tapped = async { bedJet.startTonight() }
+        waitUntil("Start Night to be in flight") { link.isHolding }
+        val action = async { model.perform(AutomationRequest.StartNight(null), bedJet) }
+        delay(300)
+        link.release()
+        tapped.await()
+
+        val done = action.await()
+        val running = bedJet.run!!
+        assertEquals("“${running.schedule.name}” is already running on BEDJET_3.", done)
+        assertEquals(1, bedJet.history.count { it.event is HistoryEntry.Event.ScheduleStarted })
+    }
+
+    @Test
+    fun aTurnOffActionEndsTheNightLullIsStarting() = onMain {
+        val model = launch()
+        model.choose(mine)
+        val bedJet = connected(mine, model)
+        val link = unit(mine.id)
+        // Start Night in Lull is still writing tonight's schedule when an action turns the BedJet off.
+        link.holdsSends = true
+        val tapped = async { bedJet.startTonight() }
+        waitUntil("Start Night to be in flight") { link.isHolding }
+        val name = bedJet.tonight!!.name
+        val action = async { model.perform(AutomationRequest.TurnOff, bedJet) }
+        delay(300)
+        link.release()
+        tapped.await()
+
+        assertEquals("Ended “$name” on BEDJET_3.", action.await())
+        assertNull(bedJet.run)
+        // The BedJet itself isn't left running the night.
+        assertEquals(0, link.device.programStep)
     }
 
     @Test

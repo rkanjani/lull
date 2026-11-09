@@ -92,6 +92,8 @@ final class BedJet: Identifiable {
     /// Commands under way. More than one can be, such as a Remote change while an action from Shortcuts runs.
     private var commandsUnderWay = 0
     var isBusy: Bool { commandsUnderWay > 0 }
+    /// Commands under way that end the night, which then record it as ended by the person (`endingTheNight`).
+    @ObservationIgnored private var nightsBeingEnded = 0
     /// Set as Lull lets go of a connected BedJet, until the link says it has. Over Bluetooth that takes a moment, and until
     /// then the link still says it's ready, though nothing sent on it arrives.
     @ObservationIgnored private var isLettingGo = false
@@ -336,7 +338,9 @@ final class BedJet: Identifiable {
         // Lull lets go of the BedJet overnight, so it only learns about an early stop on the next connection.
         // Nothing on this phone asked for it, so say so and keep the unit's reason code for diagnosis.
         let minutesEarly = Int(run.endsAt.timeIntervalSinceNow / 60)
-        guard !isBusy else { return }
+        // Lull ending the night records that itself. Any other command under way, such as an action's or a Remote change
+        // made as Lull connects, leaves the night to end as the BedJet says.
+        guard nightsBeingEnded == 0 else { return }
         if minutesEarly > 2 {
             record(.scheduleEnded(name: run.schedule.name, ending: .early(minutes: minutesEarly)), noticedLater: isJustConnected)
         } else {
@@ -361,7 +365,8 @@ final class BedJet: Identifiable {
     // MARK: Tonight
 
     func startTonight() async {
-        guard let schedule = tonight, link != nil else { return }
+        // One night at a time: a schedule already being written, as by an action, isn't written over.
+        guard let schedule = tonight, link != nil, !isSavingSchedule else { return }
         isSavingSchedule = true
         defer { isSavingSchedule = false }
         await perform { try await self.startSchedule(schedule, choosingSlot: true) }
@@ -439,7 +444,7 @@ final class BedJet: Identifiable {
     private func stopNight() async throws {
         let link = try connectedLink()
         let name = run?.schedule.name
-        try await link.setMode(.standby)
+        try await endingTheNight { try await link.setMode(.standby) }
         run = nil
         forgetRemoteTimer()
         record(.scheduleEnded(name: name, ending: .byYou))
@@ -484,7 +489,7 @@ final class BedJet: Identifiable {
         let endingSchedule = run?.schedule.name
         // Until the new mode is given its own run, a fan or temperature change leaves the timer alone.
         forgetRemoteTimer()
-        try await link.setMode(mode)
+        try await endingTheNight { try await link.setMode(mode) }
         // The BedJet only says it's off in its next report, and Lull may have let go of it by then, leaving it shown
         // as running outside Lull. The BedJet took the command, so it is off already; setting `run` publishes it.
         if mode == .standby { status?.mode = .standby }
@@ -686,6 +691,14 @@ final class BedJet: Identifiable {
         return try await work()
     }
 
+    /// Sends what ends any night running. The BedJet's report that its schedule stopped can arrive before the command
+    /// returns; that is this command's doing, which the caller records as ended by the person, not an early stop.
+    private func endingTheNight(_ send: () async throws -> Void) async throws {
+        nightsBeingEnded += 1
+        defer { nightsBeingEnded -= 1 }
+        try await send()
+    }
+
     /// The link for the next command. A cancelled one sends nothing, such as the fan after the temperature in an action
     /// that ran out of time: a command in flight finishes even once it's cancelled, so each one after it checks.
     private func connectedLink() throws -> BedJetLink {
@@ -823,14 +836,18 @@ final class BedJet: Identifiable {
     /// setup's or the update's, so it is refused while the BedJet uses its Wi-Fi (`isUsingWiFi`), as the controls are.
     /// That is checked once the BedJet has reported, since one may have started while the action was reaching it, or on
     /// another phone, and none starts after. Once the BedJet is installing and away, the action finds it unreachable as
-    /// usual, and an update that finished while Lull was closed doesn't hold it up.
+    /// usual, and an update that finished while Lull was closed doesn't hold it up. A schedule Lull is writing finishes first.
     private func carryOutAction<Result>(_ work: () async throws -> Result) async throws -> Result {
-        // Not yet under way while it waits: the first report since connecting can end a night that ran out or stopped
-        // early while Lull was closed, which is only recorded while no command of Lull's is under way. Control is taken only
-        // here: should the BedJet go to another phone during the wait, the action fails rather than asking for it back.
-        try await takeControl()
-        try await awaitStatus()
-        return try await underWay {
+        // Under way from the start, so while the action waits for the BedJet nothing else on this phone starts a night or
+        // sets it, and it isn't handed to another phone. Control is taken only here: should the BedJet go to another phone
+        // anyway, the action fails rather than asking for it back.
+        try await underWay {
+            try await self.takeControl()
+            try await self.awaitStatus()
+            // A night Lull is already starting, from its Start Night button or the watch, goes first, and is then the one
+            // running: sent in among its steps, another schedule could leave the BedJet with parts of both, and Off could
+            // come before the night it meant to end.
+            while self.isSavingSchedule { try await Task.sleep(nanoseconds: 100_000_000) }
             if self.isUsingWiFi { throw AutomationError.updating }
             return try await work()
         }
@@ -1156,8 +1173,8 @@ final class BedJet: Identifiable {
         let wasAway = before.at < connectedAt && isJustConnected
         switch (before.programStep, now.programStep) {
         case (0, 1...):
-            // Started from this phone, it is recorded once the BedJet confirms it.
-            if run == nil, !isBusy { record(.scheduleStarted(name: nil, phases: nil), noticedLater: wasAway) }
+            // Started from this phone, while its schedule is saved, it is recorded once the BedJet confirms it.
+            if run == nil, !isSavingSchedule { record(.scheduleStarted(name: nil, phases: nil), noticedLater: wasAway) }
             return
         // The schedule moved on to its next phase, or ended; its start and end are recorded on their own.
         case (1..., 1...) where before.programStep != now.programStep: return
