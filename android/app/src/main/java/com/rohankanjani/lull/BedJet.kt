@@ -180,7 +180,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
      * Starts talking to the BedJet. Only the one on screen asks another phone to hand it over;
      * the rest connect whenever they are free.
      */
-    fun connect(asking: Boolean) {
+    fun connect(asking: Boolean, resuming: Boolean = true) {
         link?.apply {
             onStateChange = null
             onStatus = null
@@ -197,7 +197,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         this.link = link
         linkState = link.state
         lastRefresh = 0
-        resume(asking)
+        if (resuming) resume(asking)
     }
 
     /**
@@ -216,6 +216,24 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
         val ble = link as? BleLink
         if (!asking && ble != null) ble.listen() else link?.start()
         restartSearchTimer()
+    }
+
+    /**
+     * Whether the BedJet has reported everything it does since [since], both halves of its report, so what it's doing
+     * now is known rather than what Lull last saw.
+     */
+    fun hasReported(since: Long): Boolean {
+        val at = statusReceivedAt ?: return false
+        return at >= since && status?.extra != null
+    }
+
+    /**
+     * Waits for the BedJet to say what it's doing, so an errand from the watch acts on that. Gives up after [timeout],
+     * leaving the errand's own commands to say what's wrong.
+     */
+    suspend fun awaitReport(since: Long, timeout: Long = 10_000) {
+        val deadline = System.currentTimeMillis() + timeout
+        while (System.currentTimeMillis() < deadline && !hasReported(since)) delay(100)
     }
 
     private fun restartSearchTimer() {
@@ -560,7 +578,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
             takeControl()
             work()
         } catch (error: CancellationException) {
-            // A newer slider move replaced this one; nothing went wrong.
+            // A newer slider move replaced this one, or the errand it was for ran out of time; nothing went wrong.
             throw error
         } catch (error: Exception) {
             app.report(error.message ?: BedJetError.BadResponse.message.orEmpty(), from = this)
@@ -602,7 +620,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
             if (timing.knownUnit) "known unit" else "scanned", name ?: "unnamed",
         )
         val stamp = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))
-        File(app.getApplication<android.app.Application>().filesDir, "connections.txt").appendText("$stamp $line")
+        File(app.application.filesDir, "connections.txt").appendText("$stamp $line")
     }
 
     // From outside the app

@@ -5,8 +5,7 @@ plugins {
 }
 
 /** Both apps ship under one version number, kept in the Xcode project's MARKETING_VERSION. */
-val marketingVersion: String = rootDir.resolve("../Lull.xcodeproj/project.pbxproj").readText()
-    .let { Regex("MARKETING_VERSION = ([0-9.]+);").find(it)?.groupValues?.get(1) ?: error("MARKETING_VERSION not found") }
+val marketingVersion: String by rootProject.extra
 
 /** Release signing comes from the environment (CI) so no key or password is ever committed. */
 val uploadKeystore: String? = System.getenv("LULL_UPLOAD_KEYSTORE")
@@ -58,6 +57,7 @@ android {
 
 dependencies {
     implementation(project(":bedjetkit"))
+    implementation(project(":shared"))
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.androidx.core.ktx)
@@ -73,10 +73,13 @@ dependencies {
     // Glance brings WorkManager 2.7, whose database R8 strips from release builds, so every launch crashed.
     // Newer WorkManager carries the keep rules it needs.
     implementation(libs.work.runtime)
+    // How the watch app reaches Lull on the phone, which reaches the BedJet.
+    implementation(libs.play.services.wearable)
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
 
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)
     androidTestImplementation(libs.compose.ui.test.junit4.accessibility)

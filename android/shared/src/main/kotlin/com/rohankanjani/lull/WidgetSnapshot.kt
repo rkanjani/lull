@@ -122,7 +122,7 @@ data class WidgetSnapshot(
 
     /** Saves the snapshot and says whether it differs from what was there, so widgets are only redrawn when it does. */
     fun save(context: Context): Boolean {
-        val data = AppModel.json.encodeToString(serializer(), this)
+        val data = lullJson.encodeToString(serializer(), this)
         val file = file(context)
         if (file.exists() && runCatching { file.readText() }.getOrNull() == data) return false
         return runCatching {
@@ -136,7 +136,7 @@ data class WidgetSnapshot(
         private fun file(context: Context) = File(context.filesDir, "widgets.json")
 
         fun load(context: Context): WidgetSnapshot? =
-            runCatching { AppModel.json.decodeFromString(serializer(), file(context).readText()) }.getOrNull()
+            runCatching { lullJson.decodeFromString(serializer(), file(context).readText()) }.getOrNull()
 
         /**
          * What to save for a BedJet that just reported. The BedJet reports every second and its timer drifts against

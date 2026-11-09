@@ -132,8 +132,9 @@ final class BedJet: Identifiable {
     // MARK: Connection
 
     /// Starts talking to the BedJet. Only the one on screen asks another phone to hand it over;
-    /// the rest connect whenever they are free.
-    func connect(asking: Bool) {
+    /// the rest connect whenever they are free. Off screen (`resuming: false`) the link is only set up, to start once
+    /// Lull comes on screen or an errand from the watch needs it.
+    func connect(asking: Bool, resuming: Bool = true) {
         link?.stop()
         status = nil
         firmware = nil
@@ -147,7 +148,7 @@ final class BedJet: Identifiable {
         self.link = link
         linkState = link.state
         lastRefresh = .distantPast
-        resume(asking: asking)
+        if resuming { resume(asking: asking) }
     }
 
     /// The BedJet talks to one phone at a time, so it is released whenever Lull leaves the screen.
@@ -174,6 +175,23 @@ final class BedJet: Identifiable {
         searchTimer = nil
         isSlowToFind = false
         timeSearch()
+    }
+
+    /// Whether the BedJet has reported everything it does since `date`, both halves of its report, so what it's doing
+    /// now is known rather than what Lull last saw.
+    func hasReported(since date: Date) -> Bool {
+        guard let statusReceivedAt, statusReceivedAt >= date else { return false }
+        return status?.extra != nil
+    }
+
+    /// Waits for the BedJet to say what it's doing, so an errand from the watch acts on that. Gives up after `timeout`,
+    /// leaving the errand's own commands to say what's wrong, or as soon as the errand is cancelled.
+    func awaitReport(since date: Date, timeout: TimeInterval = 10) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        // A cancelled sleep returns at once, so without the check a cancelled wait would spin until the deadline.
+        while Date() < deadline, !hasReported(since: date), !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
     }
 
     /// Counts how long Lull has been looking, across searching and connecting, but not while
@@ -284,7 +302,11 @@ final class BedJet: Identifiable {
                 slot = free
                 self.slot = slot
             }
+            // A command in flight finishes even once it's cancelled, so what comes after it is checked for: an errand
+            // iOS ran out of background time for, which may only carry on hours later, writes nothing more.
+            try Task.checkCancellation()
             try await link.store(schedule.program, slot: slot)
+            try Task.checkCancellation()
             try await link.startProgram(slot: slot)
             try await self.confirmStarted()
             self.run = ActiveRun(schedule: schedule, startedAt: Date())
@@ -485,14 +507,16 @@ final class BedJet: Identifiable {
             try await takeControl()
             try await work()
         } catch is CancellationError {
-            // A newer slider move replaced this one; nothing went wrong.
+            // A newer slider move replaced this one, or the errand it was for ran out of time; nothing went wrong.
         } catch {
             app?.report(error.localizedDescription, from: self)
         }
     }
 
-    /// Using a control while another phone has the BedJet asks that phone to hand it over first.
+    /// Using a control while another phone has the BedJet asks that phone to hand it over first. A cancelled command,
+    /// such as the next step of an errand that ran out of time, sends nothing and asks for nothing.
     private func takeControl() async throws {
+        try Task.checkCancellation()
         guard let link, link.state != .ready else { return }
         let wasElsewhere = link.state == .yielded
         link.requestControl()

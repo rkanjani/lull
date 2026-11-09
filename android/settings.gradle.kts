@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Lull"
-include(":app", ":bedjetkit")
+include(":app", ":wear", ":shared", ":bedjetkit")

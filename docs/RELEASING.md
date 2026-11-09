@@ -3,11 +3,11 @@
 Lull ships to both stores from `main`, under one version number:
 
 - **App Store**: [`.github/workflows/app-store.yml`](../.github/workflows/app-store.yml) tests BedJetKit,
-  builds and signs the iPhone app, uploads it to App Store Connect, and submits it for review. Once Apple
-  approves it, it's released automatically.
+  builds and signs the iPhone app with its Apple Watch app inside, uploads it to App Store Connect, and
+  submits it for review. Once Apple approves it, it's released automatically.
 - **Google Play**: [`.github/workflows/play-store.yml`](../.github/workflows/play-store.yml) runs the
-  Android tests, builds and signs the Android app, uploads it to Google Play and releases it to
-  production. Google reviews it before it reaches people.
+  Android tests, builds and signs the Android app and the Wear OS app, uploads them to Google Play and
+  releases them to production. Google reviews them before they reach people.
 
 Each workflow skips pushes that only touch the other platform. Both run for changes to shared files,
 such as the version in `Lull.xcodeproj`.
@@ -81,21 +81,29 @@ gh secret set DIST_CERT_PASSWORD --env app-store --repo rkanjani/lull
 
 Then delete the local `.p12` and keep the `.p8` somewhere safe, such as a password manager.
 
-### 4. Widgets: App Group and bundle identifier
+### 4. Widgets, the watch app: App Group and bundle identifiers
 
-The widgets ship as an extension inside the app (`com.rohankanjani.lull.widgets`), and read what the app
-saves through the App Group `group.com.rohankanjani.lull`. The workflow fetches a distribution profile for
-each, which only includes the App Group once it is registered and assigned to both identifiers. Do this
-once, before the first release with widgets:
+The widgets ship as an extension inside the app (`com.rohankanjani.lull.widgets`). The Apple Watch app
+(`com.rohankanjani.lull.watchkitapp`) ships inside the app too, with its watch face complications inside it
+(`com.rohankanjani.lull.watchkitapp.widgets`). Each reads what's saved through the App Group
+`group.com.rohankanjani.lull`. The workflow fetches a distribution profile for each, which only includes the
+App Group once it is registered and assigned to every identifier. Do this once, before the first release with
+widgets, and again before the first with the watch app:
 
-1. Open `Lull.xcodeproj`, choose a connected iPhone as the destination, and build. With automatic
-   signing, Xcode registers the widgets' identifier and the App Group, and turns on App Groups for both.
+1. Open `Lull.xcodeproj`, choose a connected iPhone (with a paired Apple Watch) as the destination, and
+   build. With automatic signing, Xcode registers the identifiers and the App Group, and turns on App Groups
+   for each.
 2. In [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/identifiers/list),
-   check that `com.rohankanjani.lull` and `com.rohankanjani.lull.widgets` both list
-   `group.com.rohankanjani.lull` under App Groups.
+   check that `com.rohankanjani.lull`, `com.rohankanjani.lull.widgets`, `com.rohankanjani.lull.watchkitapp`
+   and `com.rohankanjani.lull.watchkitapp.widgets` all list `group.com.rohankanjani.lull` under App Groups.
 
-The release lane signs both targets and gives the widgets the app's version, so only the app's
-**Version** needs raising.
+The release lane signs all four targets and gives them the app's version, so only the app's **Version**
+needs raising. The watch app has no listing of its own: App Store Connect shows it under the iPhone app.
+
+Before the first release with the watch app, add Apple Watch screenshots to the version in App Store
+Connect, under its **Apple Watch** tab. The lane doesn't upload screenshots, and App Store Connect won't
+submit a version with a watch app until it has them. Until then the build uploads but the submission
+fails; run the workflow again once they're added.
 
 ### 5. Turn it on
 
@@ -114,14 +122,18 @@ To pause releases, set the variable to `false`.
 
 # Google Play
 
-The Play lane checks the production track first:
+The Play lane checks the production tracks first, the phone's and the Wear OS one:
 
 | State of that version on Google Play | What the workflow does |
 | --- | --- |
-| Already on the production track (live or in review) | Nothing. Raise the version to release. |
+| Already on both production tracks (live or in review) | Nothing. Raise the version to release. |
+| On one of them only | Uploads the other app's build and releases it to production. |
 | New | Uploads a build, updates the listing text and release notes, and releases it to production. |
 
-Version codes are picked automatically: one higher than anything already uploaded to any track. The
+The Wear OS app is a second bundle of the same app, released on the Wear OS track (`wear:production`)
+alongside the phone app. Each track is checked on its own, so running the workflow again finishes a
+release where only one of the two apps went through. Version codes are picked automatically: one higher
+than anything already uploaded to any track, with the watch's one above the phone's. The
 listing images in `fastlane/metadata/android/en-US/images` are uploaded by hand when they change;
 [`android/scripts/play-listing-images.sh`](../android/scripts/play-listing-images.sh) rebuilds them from
 fresh `StoreScreenshots` captures.
@@ -192,6 +204,11 @@ gh variable set PLAY_STORE_RELEASE --body true --repo rkanjani/lull
 ```bash
 gh workflow run play-store.yml --repo rkanjani/lull
 ```
+
+Before the first release with the Wear OS app, add it in Play Console: **Test and release → Advanced
+settings → Form factors → Add form factor → Wear OS**, opt in to Wear OS distribution, and add Wear OS
+screenshots to the listing. Until then the upload to the Wear OS track fails, after the phone app's has gone
+through; run the workflow again once Wear OS is added, and it uploads only the watch app.
 
 After the first release is approved, switch to full releases:
 
