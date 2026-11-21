@@ -19,8 +19,11 @@ room, or run out of battery; the night keeps going.
 - **History**: every change through the night, with the time and room temperature, so the morning
   after you can see what you picked and when.
 - **Widgets**: tonight's schedule and where the night is up to on the Home Screen, Lock Screen and in
-  StandBy, last night at a glance, and Start Night in Control Center and Siri. On Android, Home Screen
-  widgets, Quick Settings tiles and app shortcuts. Widgets read what the app last saved, so they work while
+  StandBy, last night at a glance, and Start Night in Control Center and Siri. Tonight also counts down the
+  Remote's timer, and in StandBy on the nightstand it's made to read from across the room (one per side of the
+  bed); Both Sides shows two BedJets at once, and Quick Remote's three buttons set one to whatever you choose for each, in a
+  tap. With more than one BedJet, each widget shows the one you pick, such as your side of
+  the bed. On Android, Home Screen widgets, Quick Settings tiles and app shortcuts. Widgets read what the app last saved, so they work while
   the phone is away from the BedJet.
 - **Live Activity**: while a night or the Remote is running, its time left shows in the Dynamic Island and on the
   Lock Screen, with both sides of the bed together when two BedJets run. On Android, a Live Update in the status bar

@@ -5,8 +5,12 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
+import android.util.TypedValue
+import android.widget.RemoteViews
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
@@ -16,8 +20,13 @@ import androidx.glance.GlanceModifier
 import androidx.glance.Image
 import androidx.glance.ImageProvider
 import androidx.glance.LocalContext
+import androidx.glance.appwidget.AndroidRemoteViews
 import androidx.glance.appwidget.cornerRadius
-import androidx.glance.appwidget.updateAll
+import androidx.glance.appwidget.GlanceAppWidgetManager
+import androidx.glance.appwidget.state.updateAppWidgetState
+import androidx.glance.currentState
+import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
@@ -34,6 +43,9 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import com.rohankanjani.lull.Format
+import com.rohankanjani.lull.LiveStatus
+import com.rohankanjani.lull.LullTab
+import com.rohankanjani.lull.R
 import com.rohankanjani.lull.Phase
 import com.rohankanjani.lull.WidgetSnapshot
 import com.rohankanjani.lull.activity
@@ -132,13 +144,63 @@ fun PhaseLine(phase: Phase, detail: String, startsAt: Long, isCurrent: Boolean, 
 fun Gap(height: Dp) = Spacer(GlanceModifier.height(height))
 
 /**
+ * When the app last handed the widgets something new. A widget that is already showing is drawn again from what it
+ * read when it first appeared, unless something it reads while drawing has changed; this is that something.
+ */
+val SnapshotUpdated = longPreferencesKey("snapshotUpdated")
+
+/** The BedJet a widget is set to by editing it; none only before one is picked, when it shows the one on screen. */
+val PickedBedJet = stringPreferencesKey("bedjet")
+
+/** The BedJets a Both Sides widget is set to show on its left and right; none for the first two Lull knows. */
+val PickedLeft = stringPreferencesKey("left")
+val PickedRight = stringPreferencesKey("right")
+
+/** What the app last handed the widgets, read as a widget is drawn. */
+@Composable
+fun currentSnapshot(): WidgetSnapshot {
+    currentState(SnapshotUpdated)
+    return WidgetSnapshot.load(LocalContext.current) ?: WidgetSnapshot()
+}
+
+/**
+ * Time left, counted down by the system so it stays right while Lull is closed: "7:44:52", "59:59". Glance has no
+ * timer, so this is a classic Chronometer. It can read a second past zero before the widget is redrawn at the end.
+ */
+@Composable
+fun Countdown(end: Long, size: TextUnit, color: Color = Color.White) {
+    val context = LocalContext.current
+    val views = RemoteViews(context.packageName, R.layout.widget_countdown).apply {
+        setChronometer(R.id.countdown, SystemClock.elapsedRealtime() + (end - System.currentTimeMillis()), null, true)
+        setChronometerCountDown(R.id.countdown, true)
+        setTextViewTextSize(R.id.countdown, TypedValue.COMPLEX_UNIT_SP, size.value)
+        setTextColor(R.id.countdown, color.toArgb())
+    }
+    // A view placed this way takes all the room it's given unless told its height.
+    AndroidRemoteViews(views, GlanceModifier.height((size.value * 1.35f).dp))
+}
+
+/** "Ends 6:30 AM" through a night, "Turns off at 1:30 AM" for air from the Remote. */
+val LiveStatus.ending: String
+    get() = if (this is LiveStatus.Night) "Ends ${clock(endsAt)}" else "Turns off at ${clock(endsAt)}"
+
+/** Where a tap takes Lull: the Schedule for a night, the Remote for air. */
+val LiveStatus.tab: LullTab get() = if (this is LiveStatus.Night) LullTab.SCHEDULE else LullTab.REMOTE
+
+/**
  * Redraws every widget, and books the next redraw: through a running night every few minutes and at each
  * phase change, so the widgets keep moving while Lull is closed, and at midnight, when last night moves on.
  */
 object WidgetUpdates {
     suspend fun refresh(context: Context) {
-        TonightWidget().updateAll(context)
-        LastNightWidget().updateAll(context)
+        val stamp = System.currentTimeMillis()
+        val manager = GlanceAppWidgetManager(context)
+        for (widget in listOf(TonightWidget(), LastNightWidget(), BothSidesWidget(), QuickRemoteWidget())) {
+            for (id in manager.getGlanceIds(widget.javaClass)) {
+                updateAppWidgetState(context, id) { it[SnapshotUpdated] = stamp }
+                widget.update(context, id)
+            }
+        }
         scheduleNext(context, WidgetSnapshot.load(context) ?: WidgetSnapshot())
     }
 

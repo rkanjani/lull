@@ -68,11 +68,12 @@ struct RootView: View {
         switch command {
         case let .show(tab):
             selectedTab = tab
-        case .startNight:
+        case let .remote(preset, id):
+            selectedTab = .remote
+            Task { await model.applyQuickRemote(preset, to: id) }
+        case let .startNight(id):
             selectedTab = .schedule
-            // A night already under way, from this phone or another, is left running and shown.
-            guard let bedJet = model.bedJet, bedJet.run == nil, bedJet.runningElsewhereStep == nil, !bedJet.isBusy else { return }
-            Task { await bedJet.startTonight() }
+            Task { await model.startNight(on: id) }
         }
     }
 }

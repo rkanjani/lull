@@ -63,7 +63,12 @@ final class AppModel {
     @ObservationIgnored private let makesDiscovery: (Bool) -> BedJetDiscovery
     @ObservationIgnored private var discovery: BedJetDiscovery?
     @ObservationIgnored private var lookers = 0
+    /// The ask for the BedJet on screen, waiting for Lull to have been on screen a moment.
+    @ObservationIgnored private var asking: Task<Void, Never>?
+    /// How long that is, in nanoseconds: long enough for iOS to hand Lull what a widget asked for.
+    static let askDelay: UInt64 = 1_500_000_000
     @ObservationIgnored private let liveActivities = LiveActivities()
+    @ObservationIgnored private var publishedWidgets: WidgetSnapshot?
     private var isLoaded = false
     /// The BedJets of the mode not in use, kept as they were saved.
     private var otherFleet: Fleet?
@@ -158,13 +163,35 @@ final class AppModel {
     }
 
     func appMovedToBackground() {
+        asking?.cancel()
+        asking = nil
+        AppCommands.openedToAct = false
         for bedJet in bedJets { bedJet.pause() }
         discovery?.stop()
+        // iOS can hold back a redraw asked for moments after another, and the BedJet changes in bursts, so the widgets
+        // are redrawn once more on leaving, with what Lull last knew.
+        publishWidgets(forced: true)
     }
 
     func appBecameActive() {
-        for bedJet in bedJets { bedJet.resume(asking: bedJet.id == selectedID) }
+        for bedJet in bedJets { bedJet.resume(asking: false) }
+        askForShownSoon()
         if lookers > 0 { discovery?.start() }
+    }
+
+    /// Asks another phone for the BedJet on screen, once Lull has been on screen a moment. Every BedJet connects by
+    /// itself straight away if it's free; asking only matters when another phone has it. The moment's wait lets a
+    /// widget, control or shortcut that opened Lull say so first (`AppCommands.openedToAct`), as iOS may bring Lull to
+    /// the screen before it runs one, and then nothing is asked.
+    private func askForShownSoon() {
+        asking?.cancel()
+        guard let id = selectedID else { return }
+        asking = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.askDelay)
+            guard let self, !Task.isCancelled, !AppCommands.openedToAct,
+                  let shown = self.bedJet, shown.id == id, !shown.isConnected else { return }
+            shown.resume(asking: true)
+        }
     }
 
     func makeLink(for bedJet: BedJet) -> BedJetLink {
@@ -183,7 +210,24 @@ final class AppModel {
         bedJets = fleet.bedJets.map { BedJet($0, isDemo: demoMode, app: self) }
         // Versions that knew several BedJets showed the first until another was picked.
         selectedID = needsChoice ? nil : fleet.selected.flatMap { id in bedJets.first { $0.id == id }?.id } ?? bedJets.first?.id
-        for bedJet in bedJets { bedJet.connect(asking: bedJet.id == selectedID) }
+        for bedJet in bedJets { bedJet.connect(asking: false) }
+        askForShownSoon()
+    }
+
+    // MARK: From outside the app
+
+    /// A Quick Remote button: sets the BedJet it was set to, or the one on screen, to its preset, if that BedJet is free.
+    func applyQuickRemote(_ preset: RemotePreset, to id: BedJet.ID?) async {
+        // From a widget set to one BedJet: that one, and none rather than another if Lull can't switch now.
+        if let id, !select(id) { return }
+        await bedJet?.applyPreset(preset)
+    }
+
+    /// Starts tonight from a widget, a control, Siri or Shortcuts: on the BedJet named, or the one on screen, if it's free.
+    func startNight(on id: BedJet.ID?) async {
+        // Started from a widget showing one BedJet: that one, and none rather than another if Lull can't switch now.
+        if let id, !select(id) { return }
+        await bedJet?.startTonightIfFree()
     }
 
     // MARK: Looking for BedJets
@@ -357,19 +401,37 @@ final class AppModel {
     // MARK: Widgets
 
     /// Hands the widgets what they show, for the BedJet on screen, and redraws them when it changed. Widgets can't
-    /// reach the BedJet, so this is all they know until Lull is opened again.
-    func publishWidgets() {
+    /// reach the BedJet, so this is all they know until Lull is opened again. `forced` redraws them even if nothing changed.
+    func publishWidgets(forced: Bool = false) {
         guard isLoaded, storage.publishesWidgets else { return }
+        // Called with every report from a BedJet, so what was last handed over is kept rather than read back.
+        let before = publishedWidgets ?? WidgetSnapshot.load()
         let snapshot = WidgetSnapshot(
             tonight: bedJet?.tonight,
             run: bedJet?.run,
             recentHistory: WidgetSnapshot.recent(bedJet?.history ?? []),
             useFahrenheit: useFahrenheit,
-            generation: bedJet?.generation ?? .v3
+            generation: bedJet?.generation ?? .v3,
+            bedJets: bedJets.map { bedJet in widgetBedJet(bedJet, before: before?.bedJets.first { $0.id == bedJet.id }) },
+            onScreen: selectedID
         )
-        guard snapshot.save() else { return }
+        let changed = snapshot != before
+        publishedWidgets = snapshot
+        let saved = changed && snapshot.save()
+        guard saved || forced else { return }
         WidgetCenter.shared.reloadAllTimelines()
         ControlCenter.shared.reloadAllControls()
+    }
+
+    /// One BedJet as the widgets see it.
+    private func widgetBedJet(_ bedJet: BedJet, before: WidgetBedJet?) -> WidgetBedJet {
+        let now = Date()
+        let current = LiveStatus.of(run: bedJet.run, status: bedJet.status, reportedAt: bedJet.statusReceivedAt,
+                                    generation: bedJet.generation, at: now)
+        let isWaiting = WidgetSnapshot.isWaiting(for: bedJet.status, isSavingSchedule: bedJet.isSavingSchedule)
+        let live = WidgetSnapshot.live(current, after: before?.live, isWaiting: isWaiting, at: now)
+        return WidgetBedJet(id: bedJet.id, name: title(of: bedJet), live: live, tonight: bedJet.tonight,
+                            generation: bedJet.generation, recentHistory: WidgetSnapshot.recent(bedJet.history))
     }
 
     // MARK: Live Activities

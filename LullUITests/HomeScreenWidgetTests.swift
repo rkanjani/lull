@@ -12,6 +12,9 @@ final class HomeScreenWidgetTests: XCTestCase {
     /// The widgets in the order the gallery pages through them.
     private enum Gallery: Int {
         case tonightSmall = 1, tonightMedium, tonightLarge, lastNightSmall, lastNightMedium
+        case bothSidesMedium, quickRemoteSmall, quickRemoteMedium
+
+        static let pages = 8
     }
 
     override func setUpWithError() throws {
@@ -60,6 +63,33 @@ final class HomeScreenWidgetTests: XCTestCase {
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
         XCTAssertTrue(app.buttons["End Night"].waitForExistence(timeout: 15))
         XCTAssertTrue(app.tabBars.buttons["Schedule"].isSelected)
+    }
+
+    func testTonightAndQuickRemote() throws {
+        app.launchArguments = ["-demoHistory", "-demoElapsedMinutes", "200"]
+        app.launch()
+        endNightIfRunning()
+        startNight()
+
+        goHome()
+        editHomeScreen()
+        removeWidgets()
+        add(.tonightSmall)
+        add(.quickRemoteSmall)
+        add(.bothSidesMedium)
+        finishEditing()
+        XCTAssertTrue(widget("Cool Drift, phase 2 of 4, Cooling").waitForExistence(timeout: 10))
+        XCTAssertTrue(springboard.buttons["Cool · 30 min"].exists)
+        try capture("05-tonight-night")
+
+        // A Quick Remote button opens Lull on the Remote and sets the BedJet going, and Tonight follows.
+        springboard.buttons["Heat · 15 min"].firstMatch.tap()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        XCTAssertTrue(app.tabBars.buttons["Remote"].isSelected)
+        XCTAssertTrue(app.staticTexts["Heating"].waitForExistence(timeout: 15))
+        goHome()
+        XCTAssertTrue(widget("Heating").waitForExistence(timeout: 15))
+        try capture("06-tonight-air")
     }
 
     func testWidgetsOnTheLockScreen() throws {
@@ -187,6 +217,12 @@ final class HomeScreenWidgetTests: XCTestCase {
     private func removeWidgets() {
         let widgets = springboard.icons.matching(NSPredicate(format: "value BEGINSWITH 'Widget'"))
         while widgets.firstMatch.exists {
+            // A large widget pushes the apps onto a page of their own, which editing can open on; go to the widget's page.
+            for _ in 0..<3 {
+                let x = widgets.firstMatch.frame.midX
+                if x < 0 { springboard.swipeRight() } else if x > springboard.frame.maxX { springboard.swipeLeft() } else { break }
+                sleep(1)
+            }
             widgets.firstMatch.buttons["DeleteButton"].tap()
             let remove = springboard.buttons["Remove"]
             XCTAssertTrue(remove.waitForExistence(timeout: 5))
@@ -212,7 +248,7 @@ final class HomeScreenWidgetTests: XCTestCase {
             springboard.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Lull, '")).firstMatch.swipeLeft()
             sleep(1)
         }
-        XCTAssertEqual(pages.value as? String, "page \(widget.rawValue) of 5")
+        XCTAssertEqual(pages.value as? String, "page \(widget.rawValue) of \(Gallery.pages)")
         springboard.buttons[" Add Widget"].tap()
         sleep(2)
     }

@@ -9,6 +9,7 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.GlanceId
+import androidx.glance.currentState
 import androidx.glance.GlanceModifier
 import androidx.glance.LocalContext
 import androidx.glance.LocalSize
@@ -49,7 +50,8 @@ class LastNightWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val snapshot = WidgetSnapshot.load(context) ?: WidgetSnapshot()
         WidgetUpdates.scheduleNext(context, snapshot)
-        provideContent { LastNightContent(snapshot, System.currentTimeMillis()) }
+        // The BedJet the widget is set to, drawn as the one on screen is.
+        provideContent { LastNightContent(currentSnapshot().showing(currentState(PickedBedJet)), System.currentTimeMillis()) }
     }
 
     companion object {
@@ -69,13 +71,14 @@ fun LastNightContent(snapshot: WidgetSnapshot, now: Long) {
         GlanceModifier
             .fillMaxSize()
             .widgetBackground()
-            .clickable(actionStartActivity(AppCommands.openIntent(context, LullTab.HISTORY)))
+            // Opens Lull on the BedJet the widget shows, which may not be the one on screen.
+            .clickable(actionStartActivity(AppCommands.openIntent(context, LullTab.HISTORY, showing = snapshot.onScreen)))
             .padding(WidgetPadding),
     ) {
         val night = snapshot.lastNight(now)
         val start = night?.entries?.firstOrNull()?.date
         val end = night?.entries?.lastOrNull()?.date
-        if (night != null && start != null && end != null) Content(snapshot, night, start, end) else Empty()
+        if (night != null && start != null && end != null) Content(snapshot, night, start, end) else Empty(snapshot)
     }
 }
 
@@ -91,18 +94,23 @@ private fun Content(snapshot: WidgetSnapshot, night: Night, start: Long, end: Lo
     }
     val changes = night.entries.count { it.event is HistoryEntry.Event.Air }
     val times = "${clock(start)} – ${clock(end)}"
-    val spoken = listOfNotNull(
+    val spoken = snapshot.spoken(listOfNotNull(
         "Last night, $title",
         names.ifEmpty { null },
         "${clock(start)} to ${clock(end)}",
         room?.let { "room ${it.replace("–", " to ")}" },
         if (changes > 0) "$changes ${if (changes == 1) "change" else "changes"}" else null,
-    ).joinToString(", ")
+    ).joinToString(", "))
     val curveWidth = LocalSize.current.width - WidgetPadding * 2 + 16.dp
     val described = GlanceModifier.fillMaxSize().semantics { contentDescription = spoken }
 
     if (LocalSize.current.width < LastNightWidget.MEDIUM.width) {
         Column(described) {
+            // Stacked: a name and "Last night" don't fit across a small widget together.
+            snapshot.headingName?.let {
+                WidgetEyebrow(it)
+                Gap(3.dp)
+            }
             WidgetEyebrow("Last night")
             Gap(4.dp)
             Text(title, style = widgetText(17.sp, weight = FontWeight.Medium), maxLines = 1)
@@ -120,7 +128,7 @@ private fun Content(snapshot: WidgetSnapshot, night: Night, start: Long, end: Lo
     Column(described) {
         Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             Column(GlanceModifier.defaultWeight()) {
-                WidgetEyebrow("Last night")
+                WidgetEyebrow(snapshot.headed("Last night"))
                 Gap(3.dp)
                 Text(title, style = widgetText(19.sp, weight = FontWeight.Medium), maxLines = 1)
                 if (names.isNotEmpty()) Text(names, style = widgetText(12.sp, Theme.secondary, FontWeight.Medium), maxLines = 1)
@@ -146,8 +154,13 @@ private fun Content(snapshot: WidgetSnapshot, night: Night, start: Long, end: Lo
 }
 
 @Composable
-private fun Empty() {
-    Column(GlanceModifier.fillMaxSize().semantics { contentDescription = "Last night. No nights yet. Nights with your BedJet show up here the morning after." }) {
+private fun Empty(snapshot: WidgetSnapshot) {
+    val spoken = "${snapshot.spoken("Last night")}. No nights yet. Nights with your BedJet show up here the morning after."
+    Column(GlanceModifier.fillMaxSize().semantics { contentDescription = spoken }) {
+        snapshot.headingName?.let {
+            WidgetEyebrow(it)
+            Gap(3.dp)
+        }
         WidgetEyebrow("Last night")
         Spacer(GlanceModifier.defaultWeight())
         Text("No nights yet", style = widgetText(17.sp, weight = FontWeight.Medium))

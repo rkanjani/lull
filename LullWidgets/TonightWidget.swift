@@ -9,35 +9,38 @@ struct NightEntry: TimelineEntry {
 }
 
 /// Reads what the app last saved and lays out the night ahead of time: the BedJet keeps to its schedule by the
-/// clock, so every phase change can be drawn without waking the app.
-struct NightProvider: TimelineProvider {
+/// clock, so every phase change can be drawn without waking the app. Draws the BedJet the widget is set to.
+struct NightProvider: AppIntentTimelineProvider {
     var preview = WidgetSnapshot.preview()
 
     func placeholder(in context: Context) -> NightEntry {
         NightEntry(date: Date(), snapshot: preview)
     }
 
-    func getSnapshot(in context: Context, completion: @escaping (NightEntry) -> Void) {
-        completion(NightEntry(date: Date(), snapshot: context.isPreview ? preview : WidgetSnapshot.load() ?? WidgetSnapshot()))
+    func snapshot(for configuration: BedJetConfiguration, in context: Context) async -> NightEntry {
+        // The gallery shows the sample BedJets, which a real one picked for the widget isn't among.
+        if context.isPreview { return NightEntry(date: Date(), snapshot: preview) }
+        let snapshot = WidgetSnapshot.load() ?? WidgetSnapshot()
+        return NightEntry(date: Date(), snapshot: snapshot.showing(configuration.bedJet?.id))
     }
 
-    func getTimeline(in context: Context, completion: @escaping (Timeline<NightEntry>) -> Void) {
-        let snapshot = WidgetSnapshot.load() ?? WidgetSnapshot()
+    func timeline(for configuration: BedJetConfiguration, in context: Context) async -> Timeline<NightEntry> {
+        let snapshot = (WidgetSnapshot.load() ?? WidgetSnapshot()).showing(configuration.bedJet?.id)
         let now = Date()
         let entries = snapshot.redraws(from: now).map { NightEntry(date: $0, snapshot: snapshot) }
         // The app redraws the widgets whenever what they show changes. Last night also moves on at midnight.
         let midnight = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: now)) ?? now
-        completion(Timeline(entries: entries, policy: .after(max(midnight, entries.last?.date ?? now))))
+        return Timeline(entries: entries, policy: .after(max(midnight, entries.last?.date ?? now)))
     }
 }
 
 struct TonightWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "Tonight", provider: NightProvider()) { entry in
+        AppIntentConfiguration(kind: "Tonight", intent: BedJetConfiguration.self, provider: NightProvider()) { entry in
             TonightView(entry: entry)
         }
         .configurationDisplayName("Tonight")
-        .description("Tonight's schedule, and where the night is up to once it's running.")
+        .description("Tonight's schedule, where the night is up to once it's running, and the Remote's timer. Made for StandBy too.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .accessoryCircular, .accessoryRectangular, .accessoryInline])
     }
 }
@@ -46,21 +49,31 @@ struct TonightView: View {
     let entry: NightEntry
     @Environment(\.widgetFamily) private var family
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.showsWidgetContainerBackground) private var showsBackground
 
     private var snapshot: WidgetSnapshot { entry.snapshot }
     private var now: Date { entry.date }
+    /// The BedJet the widget is set to, and what it's doing.
+    private var bedJet: WidgetBedJet? { snapshot.bedJet(nil) }
+    private var live: LiveStatus? { bedJet?.live(at: now) }
 
     var body: some View {
         Group {
-            if let run = snapshot.run(at: now) {
+            if !family.isAccessory, !showsBackground, let bedJet {
+                // StandBy: no card behind it, and read from across the room.
+                BedJetSummary(bedJet: bedJet, snapshot: snapshot, now: now, isStandBy: true)
+            } else if let run = snapshot.run(at: now) {
                 running(run)
+            } else if !family.isAccessory, case .air? = live, let bedJet {
+                // Air from the Remote, with its timer. The Lock Screen keeps to the night.
+                BedJetSummary(bedJet: bedJet, snapshot: snapshot, now: now, isMedium: family != .systemSmall)
             } else if let schedule = snapshot.tonight {
                 planned(schedule)
             } else {
                 empty
             }
         }
-        .widgetURL(LullTab.schedule.url)
+        .widgetURL(snapshot.link(to: family.isAccessory ? .schedule : live?.tab ?? .schedule))
         // Lull is always dark, whatever the Home Screen's appearance; Lock Screen widgets take the system's.
         .environment(\.colorScheme, family.isAccessory ? colorScheme : .dark)
         .containerBackground(for: .widget) {
@@ -77,12 +90,12 @@ struct TonightView: View {
         let minutesLeft = current?.minutesLeft ?? 0
         let progress = run.progress(at: now)
         let wake = run.endsAt.formatted(date: .omitted, time: .shortened)
-        let spoken = [
+        let spoken = snapshot.spoken([
             run.schedule.name,
             current.map { "phase \($0.index + 1) of \(run.schedule.phases.count)" },
             current.map { "\($0.phase.mode.activity), \(Format.spokenDuration($0.minutesLeft)) left" },
             "ends at \(wake)",
-        ].compactMap { $0 }.joined(separator: ", ")
+        ].compactMap { $0 }.joined(separator: ", "))
 
         switch family {
         case .accessoryCircular:
@@ -108,6 +121,9 @@ struct TonightView: View {
             Label("\(mode.activity) · ends \(wake)", systemImage: mode.symbol)
         case .systemSmall:
             VStack(alignment: .leading, spacing: 0) {
+                if let name = snapshot.headingName {
+                    WidgetEyebrow(name).padding(.bottom, 3)
+                }
                 ModeLabel(mode: mode)
                 Text(run.schedule.name)
                     .font(.system(size: 17, weight: .semibold))
@@ -133,7 +149,8 @@ struct TonightView: View {
             .accessibilityLabel(spoken)
         default:
             VStack(alignment: .leading, spacing: 10) {
-                header(eyebrow: current.map { "Phase \($0.index + 1) of \(run.schedule.phases.count)" } ?? "Finishing", title: run.schedule.name) {
+                header(eyebrow: snapshot.headed(current.map { "Phase \($0.index + 1) of \(run.schedule.phases.count)" } ?? "Finishing"),
+                       title: run.schedule.name) {
                     VStack(alignment: .trailing, spacing: 3) {
                         ModeLabel(mode: mode)
                         Text("\(Format.duration(minutesLeft)) left")
@@ -160,7 +177,7 @@ struct TonightView: View {
 
     @ViewBuilder
     private func planned(_ schedule: Schedule) -> some View {
-        let spoken = "Tonight, \(schedule.name), \(schedule.spokenSummary)"
+        let spoken = snapshot.spoken("Tonight, \(schedule.name), \(schedule.spokenSummary)")
         switch family {
         case .accessoryCircular:
             ZStack {
@@ -178,7 +195,7 @@ struct TonightView: View {
             .accessibilityLabel(spoken)
         case .accessoryRectangular:
             VStack(alignment: .leading, spacing: 1) {
-                Label("Tonight", systemImage: "moon.stars.fill").font(.caption).foregroundStyle(.secondary)
+                Label(snapshot.headed("Tonight"), systemImage: "moon.stars.fill").font(.caption).foregroundStyle(.secondary)
                 Text(schedule.name).font(.headline).widgetAccentable()
                 Text(schedule.summary)
             }
@@ -190,6 +207,10 @@ struct TonightView: View {
             Label("Tonight: \(schedule.name)", systemImage: "moon.stars.fill")
         case .systemSmall:
             VStack(alignment: .leading, spacing: 0) {
+                // Stacked: a name and "Tonight" don't fit across a small widget together.
+                if let name = snapshot.headingName {
+                    WidgetEyebrow(name).padding(.bottom, 3)
+                }
                 WidgetEyebrow("Tonight")
                 Text(schedule.name)
                     .font(.system(size: 17, weight: .semibold))
@@ -214,8 +235,9 @@ struct TonightView: View {
             .accessibilityLabel(spoken)
         default:
             VStack(alignment: .leading, spacing: 10) {
-                header(eyebrow: "Tonight", title: schedule.name) {
-                    Button(intent: StartNightIntent()) {
+                header(eyebrow: snapshot.headed("Tonight"), title: schedule.name) {
+                    // Started on the BedJet the widget shows, which may not be the one on screen in Lull.
+                    Button(intent: StartNightIntent(bedJet: snapshot.bedJet(nil).map(BedJetEntity.init))) {
                         Text("Start")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.black)
