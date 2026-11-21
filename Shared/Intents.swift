@@ -15,9 +15,17 @@ enum LullTab: String, AppEnum {
     /// Opens Lull on this tab when a widget is tapped.
     var url: URL { URL(string: "lull://\(rawValue)")! }
 
+    /// Opens Lull on this tab showing one BedJet, from something outside Lull that shows it.
+    func url(showing bedJet: UUID) -> URL { URL(string: "lull://\(rawValue)?bedjet=\(bedJet.uuidString)")! }
+
     init?(url: URL) {
         guard url.scheme == "lull", let tab = url.host().flatMap(LullTab.init(rawValue:)) else { return nil }
         self = tab
+    }
+
+    /// The BedJet a link asks to show, if it names one.
+    static func bedJet(in url: URL) -> UUID? {
+        URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "bedjet" }?.value.flatMap(UUID.init)
     }
 }
 

@@ -1,7 +1,7 @@
 import Foundation
 
 /// A schedule that is running on the BedJet right now.
-struct ActiveRun: Codable, Equatable {
+struct ActiveRun: Codable, Hashable {
     var schedule: Schedule
     var startedAt: Date
 

@@ -46,13 +46,7 @@ data class WidgetSnapshot(
     fun degrees(halfCelsius: Int): String = "${Format.degrees(halfCelsius, useFahrenheit)}°"
 
     /** What a phase is set to, such as "75° · Fan 40%", worded like the schedule editor. */
-    fun detail(phase: Phase): String {
-        val parts = buildList {
-            if (generation.adjustsTemperature(phase.mode)) add(degrees(phase.temperature))
-            if (phase.mode.usesFan) add("Fan ${phase.fanPercent}%")
-        }
-        return parts.ifEmpty { listOf("Air off") }.joinToString(" · ")
-    }
+    fun detail(phase: Phase): String = phase.setting(on = generation, fahrenheit = useFahrenheit)
 
     /** Saves the snapshot and says whether it differs from what was there, so widgets are only redrawn when it does. */
     fun save(context: Context): Boolean {

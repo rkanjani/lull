@@ -36,6 +36,12 @@ struct Phase: Identifiable, Codable, Hashable {
     var step: ProgramStep {
         ProgramStep(mode: mode, fanStep: fanPercent / 5 - 1, temperature: temperature, hours: minutes / 60, minutes: minutes % 60)
     }
+
+    /// What this phase is set to on a kind of BedJet, such as "75° · Fan 40%", worded like the schedule editor.
+    func setting(on generation: Generation, fahrenheit: Bool) -> String {
+        Format.setting(mode: mode, temperature: generation.adjustsTemperature(mode) ? temperature : nil,
+                       fanPercent: fanPercent, fahrenheit: fahrenheit)
+    }
 }
 
 struct Schedule: Identifiable, Codable, Hashable {
@@ -181,6 +187,15 @@ enum Format {
     static func degrees(_ halfCelsius: Int, fahrenheit: Bool) -> Int {
         let celsius = Double(halfCelsius) / 2
         return Int((fahrenheit ? celsius * 9 / 5 + 32 : celsius).rounded())
+    }
+
+    /// What a phase or the Remote is set to, such as "75° · Fan 40%", worded like the schedule editor. The temperature
+    /// is nil for modes that don't let you set it.
+    static func setting(mode: Mode, temperature: Int?, fanPercent: Int, fahrenheit: Bool) -> String {
+        var parts: [String] = []
+        if let temperature { parts.append("\(degrees(temperature, fahrenheit: fahrenheit))°") }
+        if mode.usesFan { parts.append("Fan \(fanPercent)%") }
+        return parts.isEmpty ? "Air off" : parts.joined(separator: " · ")
     }
 
     static func halfCelsius(fromDegrees degrees: Int, fahrenheit: Bool) -> Int {

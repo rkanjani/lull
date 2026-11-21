@@ -576,6 +576,25 @@ final class DeviceSelectionTests: XCTestCase {
         XCTAssertEqual(timerCommands(unit), [])
         XCTAssertEqual(try remainingSeconds(unit), 675 * 60, accuracy: 15)
     }
+
+    // MARK: Turning off
+
+    func testTurningOffStopsShowingTheBedJetBeforeItReports() async throws {
+        let model = launch()
+        model.choose(mine)
+        let bedJet = try await connected(mine, in: model)
+        await bedJet.setMode(.heat)
+        XCTAssertNotNil(LiveStatus.of(run: bedJet.run, status: bedJet.status, reportedAt: bedJet.statusReceivedAt,
+                                      generation: bedJet.generation))
+
+        // Lull lets go of the BedJet once it leaves the screen, which can be before the BedJet says it's off. It took
+        // the command, so it's no longer shown as running.
+        unit(mine.id).reports = false
+        await bedJet.setMode(.standby)
+        XCTAssertEqual(bedJet.status?.mode, .standby)
+        XCTAssertNil(LiveStatus.of(run: bedJet.run, status: bedJet.status, reportedAt: bedJet.statusReceivedAt,
+                                   generation: bedJet.generation))
+    }
 }
 
 /// A BedJet for tests. It speaks like the simulated one, but connects only when allowed, records every command,
@@ -586,6 +605,8 @@ final class FakeLink: BedJetLink {
     var generation: Generation = .v3
     var answers = true
     var holdsSends = false
+    /// Off, the unit takes commands but its reports never arrive, as when Lull lets go of it first.
+    var reports = true
     private(set) var sent: [Data] = []
     private(set) var stops = 0
     private var held: [CheckedContinuation<Void, Never>] = []
@@ -604,7 +625,7 @@ final class FakeLink: BedJetLink {
 
     private func attach() {
         device.onStateChange = { [weak self] in self?.onStateChange?($0) }
-        device.onStatus = { [weak self] in self?.onStatus?($0) }
+        device.onStatus = { [weak self] in if self?.reports == true { self?.onStatus?($0) } }
     }
 
     func start() {

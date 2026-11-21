@@ -8,5 +8,6 @@ struct LullWidgetsBundle: WidgetBundle {
         LastNightWidget()
         StartNightControl()
         RemoteControl()
+        BedJetLiveActivity()
     }
 }

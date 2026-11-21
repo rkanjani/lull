@@ -57,10 +57,7 @@ struct WidgetSnapshot: Codable, Equatable {
 
     /// What a phase is set to, such as "75° · Fan 40%", worded like the schedule editor.
     func detail(of phase: Phase) -> String {
-        var parts: [String] = []
-        if generation.adjustsTemperature(phase.mode) { parts.append(degrees(phase.temperature)) }
-        if phase.mode.usesFan { parts.append("Fan \(phase.fanPercent)%") }
-        return parts.isEmpty ? "Air off" : parts.joined(separator: " · ")
+        phase.setting(on: generation, fahrenheit: useFahrenheit)
     }
 
     /// History worth keeping for the widgets: the last two days, which always covers last night.
