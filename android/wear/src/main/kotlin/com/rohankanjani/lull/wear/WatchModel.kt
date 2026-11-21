@@ -27,6 +27,15 @@ class WatchModel(val phone: Phone, private val store: WatchStore, val scope: Cor
         private set
 
     private var picked by mutableStateOf(store.picked)
+    private var showsTime by mutableStateOf(store.remoteShowsTime)
+
+    /** Whether the Remote page shows when air turns off as a time of day rather than a duration. */
+    var remoteShowsTime: Boolean
+        get() = showsTime
+        set(value) {
+            showsTime = value
+            store.remoteShowsTime = value
+        }
     /** The BedJet picked on the watch, by each side of the bed. None picked follows the one on screen on the phone. */
     var pickedID: String?
         get() = picked

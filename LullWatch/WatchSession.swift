@@ -174,13 +174,17 @@ final class DemoPhone: Phone {
                 // A night already under way is left running, as on the iPhone.
                 let isRunning = if case .night? = bedJet.live(at: now) { true } else { false }
                 if !isRunning, let tonight = bedJet.tonight {
-                    bedJet.live = .night(ActiveRun(schedule: tonight, startedAt: now.addingTimeInterval(TimeInterval(-elapsedMinutes * 60))))
+                    let startedAt = now.addingTimeInterval(TimeInterval(-elapsedMinutes * 60))
+                    // As the phone starts it: with a wake time, scaled to end at it.
+                    bedJet.live = .night(ActiveRun(schedule: tonight.resolved(startingAt: Format.minuteOfDay(startedAt)), startedAt: startedAt))
                 }
             case .endNight:
                 bedJet.live = nil
-            case let .remote(preset, _, changed):
+            case let .remote(preset, _, changed, endMinute):
                 let preset = preset.clamped
                 let changes = changed ?? Set(RemoteSetting.allCases)
+                // As the iPhone does, a time picked to turn off at is remembered for the next time the air is turned on.
+                if let endMinute { bedJet.pickedEndMinute = endMinute }
                 if changes.contains(.mode) {
                     // A new mode runs as long as it can, unless a time was set with it.
                     let minutes = changes.contains(.time)

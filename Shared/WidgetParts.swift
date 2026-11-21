@@ -110,14 +110,18 @@ struct PhaseLine: View {
 }
 
 extension Schedule {
-    /// "7 hr 45 min · 4 phases"
-    var summary: String {
-        "\(Format.duration(totalMinutes)) · \(phases.count) \(phases.count == 1 ? "phase" : "phases")"
-    }
+    /// How long the night runs, "7 hr 45 min", or "Until 6:30 AM" with a wake time, since then that depends on when it starts.
+    var length: String { wakeTime.map { "Until \(Format.clock($0))" } ?? Format.duration(totalMinutes) }
 
-    var spokenSummary: String {
-        "\(Format.spokenDuration(totalMinutes)), \(phases.count) \(phases.count == 1 ? "phase" : "phases")"
-    }
+    var spokenLength: String { wakeTime.map { "until \(Format.clock($0))" } ?? Format.spokenDuration(totalMinutes) }
+
+    /// Short enough for the Lock Screen: "7h 45m", or the wake time.
+    var shortLength: String { wakeTime.map(Format.clock) ?? Format.shortDuration(totalMinutes) }
+
+    /// "7 hr 45 min · 4 phases", or "Until 6:30 AM · 4 phases"
+    var summary: String { "\(length) · \(phases.count) \(phases.count == 1 ? "phase" : "phases")" }
+
+    var spokenSummary: String { "\(spokenLength), \(phases.count) \(phases.count == 1 ? "phase" : "phases")" }
 }
 
 extension Format {

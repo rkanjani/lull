@@ -21,7 +21,8 @@ func run() {
                 for (slot, program) in try await link.storedPrograms().enumerated() {
                     print("slot \(slot + 1):", program.map { "\($0.name)" } ?? "empty")
                     for step in program?.steps ?? [] {
-                        print("   \(step.mode) fan \((step.fanStep + 1) * 5)% \(Double(step.temperature) / 2)C for \(step.hours)h\(step.minutes)m")
+                        let length = step.endsAtClockTime ? String(format: "until %ld:%02ld", step.hours, step.minutes) : "for \(step.hours)h\(step.minutes)m"
+                        print("   \(step.mode) fan \((step.fanStep + 1) * 5)% \(Double(step.temperature) / 2)C \(length)")
                     }
                 }
             } catch {

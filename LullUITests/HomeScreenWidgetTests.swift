@@ -26,7 +26,7 @@ final class HomeScreenWidgetTests: XCTestCase {
 
     func testWidgetsOnTheHomeScreen() throws {
         // A night a few hours in, with a few nights before it in History.
-        app.launchArguments = ["-demoHistory", "-demoElapsedMinutes", "200"]
+        app.launchArguments = ["-noWakeTimes", "-demoHistory", "-demoElapsedMinutes", "200"]
         app.launch()
         endNightIfRunning()
         startNight()
@@ -66,7 +66,7 @@ final class HomeScreenWidgetTests: XCTestCase {
     }
 
     func testTonightAndQuickRemote() throws {
-        app.launchArguments = ["-demoHistory", "-demoElapsedMinutes", "200"]
+        app.launchArguments = ["-noWakeTimes", "-demoHistory", "-demoElapsedMinutes", "200"]
         app.launch()
         endNightIfRunning()
         startNight()
@@ -93,7 +93,7 @@ final class HomeScreenWidgetTests: XCTestCase {
     }
 
     func testWidgetsOnTheLockScreen() throws {
-        app.launchArguments = ["-demoHistory", "-demoElapsedMinutes", "200"]
+        app.launchArguments = ["-noWakeTimes", "-demoHistory", "-demoElapsedMinutes", "200"]
         app.launch()
         app.tabBars.buttons["Schedule"].tap()
         if !app.buttons["End Night"].waitForExistence(timeout: 3) { startNight() }

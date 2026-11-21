@@ -22,6 +22,7 @@ import com.rohankanjani.lull.LullTab
 import com.rohankanjani.lull.Schedule
 import com.rohankanjani.lull.WidgetSnapshot
 import com.rohankanjani.lull.activity
+import com.rohankanjani.lull.shortLength
 import com.rohankanjani.lull.spokenSummary
 import com.rohankanjani.lull.widgets.clock
 import java.time.Instant
@@ -68,7 +69,7 @@ class TonightComplicationService : SuspendingComplicationDataSourceService() {
             }
             tonight != null -> {
                 val spoken = text(spokenTonight(snapshot, tonight))
-                val length = text(Format.shortDuration(tonight.totalMinutes))
+                val length = text(tonight.shortLength)
                 when (type) {
                     ComplicationType.SHORT_TEXT -> ShortTextComplicationData.Builder(length, spoken).setMonochromaticImage(moon).setTapAction(tap).build()
                     ComplicationType.LONG_TEXT ->

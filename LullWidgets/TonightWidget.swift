@@ -146,7 +146,7 @@ struct TonightView: View {
                     .frame(height: 40)
                     .padding(.horizontal, -8)
                 Spacer(minLength: 6)
-                Text(Format.duration(schedule.totalMinutes))
+                Text(schedule.length)
                     .font(.system(size: 13, weight: .semibold))
                     .monospacedDigit()
                 Text("Tap to start")
@@ -161,7 +161,7 @@ struct TonightView: View {
             VStack(alignment: .leading, spacing: 10) {
                 header(eyebrow: snapshot.headed("Tonight"), title: schedule.name) {
                     // Started on the BedJet the widget shows, which may not be the one on screen in Lull.
-                    Button(intent: StartNightIntent(bedJet: snapshot.bedJet(nil).map(BedJetEntity.init))) {
+                    Button(intent: StartNightInLullIntent(bedJet: snapshot.bedJet(nil).map(BedJetEntity.init))) {
                         Text("Start")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.black)
@@ -183,7 +183,8 @@ struct TonightView: View {
                     .monospacedDigit()
                     .accessibilityHidden(true)
                 if family == .systemLarge {
-                    phaseList(schedule, startedAt: now, current: nil)
+                    // Started now: with a wake time, the last phase runs until it from now.
+                    phaseList(schedule.resolved(startingAt: Format.minuteOfDay(now)), startedAt: now, current: nil)
                     Spacer(minLength: 0)
                 }
             }

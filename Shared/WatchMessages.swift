@@ -12,14 +12,16 @@ enum WatchCommand: Equatable {
     case endNight(UUID?)
     /// Sets a BedJet as the Remote does: a mode, and the temperature, fan and timer to run it at. From the watch's
     /// Remote, only the settings changed there are sent on; nil sets them all, as a Quick Remote button does.
-    case remote(RemotePreset, UUID?, changed: Set<RemoteSetting>? = nil)
+    /// `endMinute` is a time of day picked there to turn off at, which the phone remembers for the next time the air is
+    /// turned on. The timer itself is still set by `minutes`.
+    case remote(RemotePreset, UUID?, changed: Set<RemoteSetting>? = nil, endMinute: Int? = nil)
     /// Asks what the BedJets are doing now, for a watch that hasn't heard in a while.
     case refresh
 
     /// The BedJet it's for, or nil for the one on screen on the phone.
     var bedJet: UUID? {
         switch self {
-        case let .startNight(id), let .endNight(id), let .remote(_, id, _): id
+        case let .startNight(id), let .endNight(id), let .remote(_, id, _, _): id
         case .refresh: nil
         }
     }
@@ -38,7 +40,7 @@ enum WatchCommand: Equatable {
 
 extension WatchCommand: Codable {
     private enum CodingKeys: String, CodingKey {
-        case kind, bedJet, mode, minutes, temperature, fanPercent, changed
+        case kind, bedJet, mode, minutes, temperature, fanPercent, changed, endMinute
     }
 
     private enum Kind: String, Codable {
@@ -69,7 +71,9 @@ extension WatchCommand: Codable {
                                       fanPercent: try values.decode(Int.self, forKey: .fanPercent))
             // A setting a later version adds is left out, rather than refusing the rest.
             let changed = try values.decodeIfPresent([String].self, forKey: .changed).map { Set($0.compactMap(RemoteSetting.init(rawValue:))) }
-            self = .remote(preset, bedJet, changed: changed)
+            // Only a minute of the day: anything else is left out, as the timer is set by `minutes` either way.
+            let endMinute = (try? values.decodeIfPresent(Int.self, forKey: .endMinute)).flatMap { (0..<1440).contains($0) ? $0 : nil }
+            self = .remote(preset, bedJet, changed: changed, endMinute: endMinute)
         }
     }
 
@@ -80,7 +84,7 @@ extension WatchCommand: Codable {
         case .startNight: try values.encode(Kind.startNight, forKey: .kind)
         case .endNight: try values.encode(Kind.endNight, forKey: .kind)
         case .refresh: try values.encode(Kind.refresh, forKey: .kind)
-        case let .remote(preset, _, changed):
+        case let .remote(preset, _, changed, endMinute):
             try values.encode(Kind.remote, forKey: .kind)
             try values.encode(RemoteMode(preset.mode).rawValue, forKey: .mode)
             try values.encode(preset.minutes, forKey: .minutes)
@@ -88,6 +92,7 @@ extension WatchCommand: Codable {
             try values.encode(preset.fanPercent, forKey: .fanPercent)
             // In a set order, so both phones send the same bytes.
             if let changed { try values.encode(RemoteSetting.allCases.filter(changed.contains).map(\.rawValue), forKey: .changed) }
+            try values.encodeIfPresent(endMinute, forKey: .endMinute)
         }
     }
 }

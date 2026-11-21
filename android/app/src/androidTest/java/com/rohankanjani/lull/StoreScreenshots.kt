@@ -33,6 +33,7 @@ class StoreScreenshots {
             compose.waitFor(hasText("Heat"), timeoutMillis = 10_000)
             Thread.sleep(2000)
             compose.onNodeWithText("Heat").performClick()
+            compose.showTimer()
             compose.waitForSlider("Turns off in", "4 hours")
             Thread.sleep(6000)
             compose.capture("01-remote", "store")

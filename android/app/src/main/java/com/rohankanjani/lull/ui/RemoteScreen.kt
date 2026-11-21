@@ -51,11 +51,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rohankanjani.lull.AppModel
 import com.rohankanjani.lull.Format
+import com.rohankanjani.lull.RemoteTimer
 import com.rohankanjani.lull.activity
 import com.rohankanjani.lull.bedjetkit.DeviceStatus
 import com.rohankanjani.lull.bedjetkit.LinkState
 import com.rohankanjani.lull.bedjetkit.Mode
 import com.rohankanjani.lull.maxMinutes
+import com.rohankanjani.lull.title
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -69,6 +71,9 @@ fun RemoteScreen(model: AppModel) {
     var temperature by remember { mutableIntStateOf(60) }
     var fan by remember { mutableFloatStateOf(40f) }
     var runtime by remember { mutableFloatStateOf(60f) }
+    /** When the air turns off, as a minute of the day, for the Remote showing it as a time. */
+    var endMinute by remember { mutableIntStateOf(0) }
+    var picksEnd by remember { mutableStateOf(false) }
     /** While a slider is in use, and briefly after, it leads and the BedJet's reports are not applied to it. */
     var followAfter by remember { mutableLongStateOf(0L) }
     val pending = remember { mutableStateMapOf<String, Job>() }
@@ -96,6 +101,7 @@ fun RemoteScreen(model: AppModel) {
         fan = status.fanPercent.toFloat()
         val limit = runtimeLimit(status)
         runtime = minutesLeft(status).toFloat().coerceIn(limit.range)
+        endMinute = Format.endMinute(status.remainingSeconds, System.currentTimeMillis())
     }
 
     LaunchedEffect(bedJet.id) {
@@ -160,16 +166,40 @@ fun RemoteScreen(model: AppModel) {
                         range = 5f..100f, step = 5f, tint = shown.mode.tint, enabled = bedJet.canControl,
                     )
                     if (bedJet.run == null) {
-                        val limit = runtimeLimit(shown)
-                        LabeledSlider(
-                            "Turns off in", Format.duration(runtime.toInt()), runtime,
-                            onValueChange = {
-                                runtime = it
-                                sending("runtime") { bedJet.setRuntime(runtime.toInt()) }
-                            },
-                            range = limit.range, step = limit.step, enabled = bedJet.canControl,
-                            spokenValue = Format.spokenDuration(runtime.toInt()),
+                        // When the air turns off: after a duration, the default, or at a time of day. Choosing one only
+                        // changes what's shown, since the BedJet counts down either way.
+                        SegmentedChoice(
+                            listOf(false to "Timer", true to "Time"), model.remoteTimerShowsTime, { model.remoteTimerShowsTime = it },
+                            Modifier.fillMaxWidth(),
                         )
+                        // Both are laid out, the one not chosen hidden, so the card keeps one height and nothing on the screen
+                        // moves when switching. The hidden one can't be seen, touched or read.
+                        val showsTime = model.remoteTimerShowsTime
+                        val hidden = Modifier.alpha(0f).clearAndSetSemantics {}
+                        Box {
+                            val limit = runtimeLimit(shown)
+                            Box(if (showsTime) hidden else Modifier) {
+                                LabeledSlider(
+                                    "Turns off in", Format.duration(runtime.toInt()), runtime,
+                                    onValueChange = {
+                                        runtime = it
+                                        sending("runtime") { bedJet.setRuntime(runtime.toInt()) }
+                                    },
+                                    range = limit.range, step = limit.step, enabled = bedJet.canControl && !showsTime,
+                                    spokenValue = Format.spokenDuration(runtime.toInt()),
+                                    // As tall as the time's row, so "Turns off" stays put when switching between them.
+                                    headerMinHeight = TimeRowHeight,
+                                )
+                            }
+                            Column(if (showsTime) Modifier else hidden, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TimeRow("Turns off at", fontSize = 15.sp, color = Theme.secondary) {
+                                    TimeChip(endMinute, "Turns off at", "Change the time") {
+                                        if (bedJet.canControl && showsTime) picksEnd = true
+                                    }
+                                }
+                                Text(turnsOffCaption(bedJet.remoteTimer, shown, endMinute), fontSize = 13.sp, color = Theme.secondary)
+                            }
+                        }
                     } else {
                         // A schedule sets its own timing, so this is read-only until it ends.
                         ValueHeader(
@@ -190,6 +220,22 @@ fun RemoteScreen(model: AppModel) {
             )
         }
     }
+
+    if (picksEnd) {
+        TimeOfDayPicker("Turns off at", endMinute, onPick = { picked ->
+            endMinute = picked
+            sending("runtime") { bedJet.setRuntime(untilMillis = Format.nextTime(picked, System.currentTimeMillis())) }
+        }, onDismiss = { picksEnd = false })
+    }
+}
+
+/** How long until the air turns off, or why it turns off sooner than the time picked. */
+private fun turnsOffCaption(timer: RemoteTimer, status: DeviceStatus, endMinute: Int): String {
+    val cutShort = timer is RemoteTimer.Until && timer.isAhead &&
+        timer.endsAt - System.currentTimeMillis() > (status.remainingSeconds + 60) * 1000L
+    if (!cutShort) return "In ${Format.duration(minutesLeft(status))}."
+    val longest = if (status.maxRuntimeMinutes > 0) status.maxRuntimeMinutes else status.mode.maxMinutes
+    return "${status.mode.title} runs for up to ${Format.duration(longest)}, so it turns off at ${Format.clock(endMinute)}."
 }
 
 private fun minutesLeft(status: DeviceStatus): Int = maxOf((status.remainingSeconds + 59) / 60, 1)

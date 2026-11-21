@@ -7,11 +7,17 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isEnabled
+import androidx.compose.ui.test.isNotSelected
+import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -20,6 +26,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -27,6 +34,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -103,6 +111,78 @@ class LullUiTest {
     }
 
     @Test
+    fun aWakeTimeScalesTheNight() {
+        // The starter schedules as they come, with their wake times.
+        scenario.close()
+        scenario = launchLull(ephemeral = true, noWakeTimes = false)
+        compose.onNodeWithText("Schedule").performClick()
+        compose.onNode(hasContentDescription("Warm Welcome,", substring = true)).performScrollTo().performClick()
+        compose.waitFor(hasText("Add Phase"))
+
+        // Warm Welcome wakes where its night ends from the usual bedtime, so the editor shows both times and each phase's start
+        // on a usual night.
+        compose.waitFor(hasText("Wake time") and isSelected())
+        compose.onNode(hasContentDescription("Usual bedtime, ", substring = true)).assertExists()
+        compose.onNode(hasContentDescription("Wake time, ", substring = true)).assertExists()
+        // The editor's, not the one on the Schedule tab beneath it.
+        val timeline = hasContentDescription("Night timeline, ", substring = true) and hasAnyAncestor(isDialog())
+        val night = compose.onNode(timeline).label()
+        val last = hasContentDescription("Phase 4,", substring = true)
+        assertTrue(compose.onNode(last).label(), compose.onNode(last).label().contains("40 minutes, fixed length, starts "))
+        compose.capture("wake-time-editor")
+
+        // Its cool is the only phase that stretches or shrinks, so it's as long as the rest leave, with no slider.
+        val cool = hasContentDescription("Phase 3,", substring = true)
+        assertTrue(compose.onNode(cool).label(), compose.onNode(cool).label().contains("6 hours, starts "))
+        compose.onNode(cool).performScrollTo().performClick()
+        compose.waitFor(hasText("Remove Phase"))
+        compose.slider("Duration").assertDoesNotExist()
+        compose.onNode(hasContentDescription("Duration") and hasStateDescription("6 hours")).assertExists()
+        compose.onNode(hasText("Fills the rest of the night", substring = true)).assertExists()
+        Thread.sleep(1000)
+        compose.capture("wake-time-fills")
+        compose.onNodeWithText("Done").performClick()
+        compose.waitUntilGone(hasText("Remove Phase"))
+
+        // On Bedtime the night runs from the usual bedtime for the phases' set lengths, with no wake time.
+        compose.onNodeWithText("Bedtime").performScrollTo().performClick()
+        compose.waitUntilGone(hasContentDescription("Wake time, ", substring = true))
+        compose.onNode(hasContentDescription("Usual bedtime, ", substring = true)).assertExists()
+        compose.capture("wake-time-off")
+        // A shorter first phase ends the night sooner, until choosing Wake time again brings back the one it had: the cool
+        // takes up the 5 minutes.
+        compose.onNode(hasContentDescription("Phase 1,", substring = true)).performScrollTo().performClick()
+        compose.waitFor(hasText("Remove Phase"))
+        compose.slider("Duration").setTo(0f)
+        compose.onNodeWithText("Done").performClick()
+        compose.waitUntilGone(hasText("Remove Phase"))
+        assertNotEquals(night, compose.onNode(timeline).label())
+        compose.onNodeWithText("Wake time").performScrollTo().performClick()
+        compose.waitFor(hasContentDescription("Wake time, ", substring = true))
+        assertEquals("the wake time it had, not where the shorter night would end", night, compose.onNode(timeline).label())
+        assertTrue(compose.onNode(cool).label(), compose.onNode(cool).label().contains("6 hours, 5 minutes, starts "))
+
+        // The starter's closing warm-up keeps its length while the rest of the night stretches or shrinks.
+        compose.onNode(last).performScrollTo().performClick()
+        compose.waitFor(hasText("Remove Phase"))
+        compose.slider("Duration").assertExists()
+        compose.onNode(hasText("Stays 40 min while the rest of the night stretches or shrinks to end at ", substring = true)).assertExists()
+        Thread.sleep(1000)
+        compose.capture("wake-time-phase")
+        // Not fixed, it stretches or shrinks with the rest.
+        compose.onNodeWithText("Fixed length").performClick()
+        compose.waitFor(hasText("Stretches or shrinks with the rest of the night to end at ", substring = true))
+        compose.onNodeWithText("Done").performClick()
+        compose.waitUntilGone(hasText("Remove Phase"))
+        compose.waitFor(hasContentDescription("Phase 4,", substring = true) and !hasContentDescription("fixed length", substring = true))
+
+        // Saved, it's listed by when it ends.
+        compose.onNodeWithText("Save").performClick()
+        compose.waitFor(hasContentDescription("Warm Welcome, until ", substring = true))
+        compose.capture("wake-time-schedule")
+    }
+
+    @Test
     fun historyKeepsTheNight() {
         compose.onNodeWithText("History").performClick()
         compose.waitFor(hasText("No nights yet"), timeoutMillis = 10_000)
@@ -112,6 +192,7 @@ class LullUiTest {
         // History starts from the BedJet's first settled report; a change before that is where it starts.
         Thread.sleep(5000)
         compose.onNodeWithText("Heat").performClick()
+        compose.showTimer()
         compose.waitFor(hasContentDescription("Turns off in"))
         // A setting is recorded once the BedJet has held it for a few seconds.
         Thread.sleep(4000)
@@ -175,9 +256,11 @@ class LullUiTest {
     /** A row in a list of BedJets, by its name and any code after it. */
     private fun row(title: String) = labelStartsWith("$title,")
 
-    private fun relaunch(demoChoose: Boolean = false, demoFirstUnitAway: Boolean = false) {
+    private fun relaunch(demoChoose: Boolean = false, demoFirstUnitAway: Boolean = false, demoFirmwareUpdate: Boolean = false) {
         scenario.close()
-        scenario = launchLull(ephemeral = true, demoChoose = demoChoose, demoFirstUnitAway = demoFirstUnitAway)
+        scenario = launchLull(
+            ephemeral = true, demoChoose = demoChoose, demoFirstUnitAway = demoFirstUnitAway, demoFirmwareUpdate = demoFirmwareUpdate,
+        )
     }
 
     /** Opens the BedJet sheet's list of BedJets nearby and picks the second simulated one, which shares a name. */
@@ -206,6 +289,7 @@ class LullUiTest {
         compose.waitFor(second)
         Thread.sleep(2000)
         compose.onNodeWithText("Heat").performClick()
+        compose.showTimer()
         compose.waitFor(hasContentDescription("Turns off in"))
 
         // The pill switches BedJets, and each keeps its own state.
@@ -287,10 +371,44 @@ class LullUiTest {
     }
 
     @Test
+    fun firmwareUpdateIsOfferedAndInstalled() {
+        relaunch(demoFirmwareUpdate = true)
+        // The simulated BedJet offers newer firmware as soon as it connects with the air off.
+        compose.waitFor(hasText("Firmware update available"), timeoutMillis = 10_000)
+        compose.capture("firmware-update")
+        compose.onNodeWithText("Update Now").performClick()
+        // It restarts to check, downloads the update, restarts again into it, and Lull says so once it's back.
+        compose.waitFor(hasText("BedJet updated"), timeoutMillis = 30_000)
+        compose.onNodeWithText("BEDJET-DEMO is now on firmware V1.21 (demo).").assertExists()
+        compose.onNodeWithText("OK").performClick()
+        compose.waitFor(pill("BEDJET-DEMO"))
+        compose.onNodeWithText("BedJet updated").assertDoesNotExist()
+    }
+
+    @Test
+    fun aFirmwareUpdatePutOffWaitsInTheBedJetSheet() {
+        relaunch(demoFirmwareUpdate = true)
+        compose.waitFor(hasText("Firmware update available"), timeoutMillis = 10_000)
+        compose.onNodeWithText("Not Now").performClick()
+        compose.onNode(pill("BEDJET-DEMO")).performClick()
+        compose.waitFor(hasText("Done"))
+        val update = compose.onNodeWithText("Update Firmware").performScrollTo().assertIsEnabled()
+        compose.capture("firmware-update-sheet")
+        // Tapped through its click action: a tap by position can land while the sheet is still sliding up.
+        update.performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitFor(hasText("Update your BedJet's firmware?"))
+        compose.onNodeWithText("Update").performClick()
+        // Asked for from the sheet, how it went is said there, and the offer isn't made again.
+        compose.waitFor(hasText("Your BedJet updated its firmware to V1.21 (demo)."), timeoutMillis = 30_000)
+        compose.onNodeWithText("BedJet updated").assertDoesNotExist()
+    }
+
+    @Test
     fun remoteAndDevice() {
         compose.waitFor(hasText("Heat"), timeoutMillis = 10_000)
         Thread.sleep(2000)
         compose.onNodeWithText("Heat").performClick()
+        compose.showTimer()
         // Turning a mode on asks for the longest run the simulated BedJet allows: 4 hours of heat.
         compose.waitFor(hasContentDescription("Turns off in"))
         compose.waitForSlider("Turns off in", "4 hours")
@@ -309,11 +427,62 @@ class LullUiTest {
         compose.onNodeWithText("Heat").performClick()
         compose.waitForSlider("Turns off in", "4 hours")
         compose.capture("remote-heat")
+
+        // Shown as a time, it's when the countdown runs out, and the choice is remembered.
+        compose.onNodeWithText("Time").performClick()
+        compose.waitFor(hasContentDescription("Turns off at, ", substring = true))
+        compose.onNode(hasText("In 3 hr", substring = true) or hasText("In 4 hr", substring = true)).performScrollTo()
+        compose.onNode(hasContentDescription("Turns off in")).assertDoesNotExist()
+        compose.capture("remote-time")
+        scenario.close()
+        scenario = launchLull(ephemeral = true)
+        compose.waitFor(hasText("Heat"), timeoutMillis = 10_000)
+        compose.onNodeWithText("Heat").performClick()
+        compose.waitFor(hasContentDescription("Turns off at, ", substring = true), timeoutMillis = 10_000)
+        // Back to the default, which later tests and launches expect.
+        compose.onNodeWithText("Timer").performClick()
+        compose.waitFor(hasContentDescription("Turns off in"))
         compose.onNodeWithText("Off").performClick()
 
         compose.onNode(hasContentDescription("BedJet,", substring = true)).performClick()
         compose.waitFor(hasText("SAVED ON THE BEDJET"), timeoutMillis = 10_000)
         compose.capture("device")
+    }
+
+    @Test
+    fun wifiAndFirmwareCheck() {
+        compose.waitFor(hasText("Heat"), timeoutMillis = 10_000)
+        Thread.sleep(2000)
+        compose.onNode(hasContentDescription("BedJet,", substring = true)).performClick()
+        compose.waitFor(hasText("Network"), timeoutMillis = 10_000)
+        compose.onNodeWithText("Network").performScrollTo().performClick()
+
+        // The network's name is typed, and the simulated BedJet joins any network, testing it one step a second.
+        compose.waitFor(hasContentDescription("Name"))
+        compose.onNode(hasContentDescription("Name")).performTextInput("Home")
+        compose.onNode(hasContentDescription("Password")).performTextInput("12345678")
+        compose.onNodeWithText("Join Network").performClick()
+        // What the BedJet is doing takes the button's title, and how it went goes below once the title is back.
+        compose.waitUntilGone(hasText("Join Network"))
+        compose.waitFor(hasText("Your BedJet joined “Home” and can now check for firmware updates."), timeoutMillis = 15_000)
+        compose.onNodeWithText("Join Network").assertExists()
+        compose.capture("wifi")
+
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.waitFor(hasText("Home"))
+        compose.onNodeWithText("Check for Update").performScrollTo().performClick()
+        compose.waitFor(hasText("Check for a firmware update?"))
+        compose.capture("firmware-confirm")
+        compose.onNodeWithText("Check").performClick()
+        // Like a real BedJet 3, the simulated one restarts to check, and the sheet says so rather than losing it.
+        compose.waitFor(hasText("Restarting your BedJet to check…"), timeoutMillis = 10_000)
+        compose.onNodeWithText("Check for Update").assertDoesNotExist()
+        compose.capture("firmware-restarting")
+        compose.waitFor(hasText("Your BedJet's firmware is up to date."), timeoutMillis = 15_000)
+        compose.onNodeWithText("Check for Update").assertExists()
+        // Going back shows the sheet from the top, so bring the result, and the Wi-Fi network below it, into view.
+        compose.onNodeWithText("Network").performScrollTo()
+        compose.capture("firmware")
     }
 }
 
@@ -324,6 +493,10 @@ fun launchLull(
     demoHistory: Boolean = false,
     demoChoose: Boolean = false,
     demoFirstUnitAway: Boolean = false,
+    // On unless a test is about the starter schedules' wake times: one more than 16 hours away can't be reached, so
+    // starting a night would otherwise pass or fail by the time of day.
+    noWakeTimes: Boolean = true,
+    demoFirmwareUpdate: Boolean = false,
 ): ActivityScenario<MainActivity> {
     val intent = Intent(ApplicationProvider.getApplicationContext(), MainActivity::class.java)
         .putExtra("ephemeral", ephemeral)
@@ -332,7 +505,17 @@ fun launchLull(
         .putExtra("demoLabelConnected", demoLabelConnected)
         .putExtra("demoChoose", demoChoose)
         .putExtra("demoFirstUnitAway", demoFirstUnitAway)
+        .putExtra("noWakeTimes", noWakeTimes)
+        .putExtra("demoFirmwareUpdate", demoFirmwareUpdate)
     return ActivityScenario.launch(intent)
+}
+
+/** The Remote's timer as a duration, the default, whatever an earlier run left chosen: the choice is kept even when ephemeral. */
+fun ComposeTestRule.showTimer() {
+    waitFor(hasText("Timer"))
+    if (onAllNodes(hasText("Timer") and isNotSelected()).fetchSemanticsNodes().isNotEmpty()) {
+        onNode(hasText("Timer")).performScrollTo().performClick()
+    }
 }
 
 /** A node whose spoken label begins with this, so "BEDJET-DEMO," doesn't also find "BEDJET-DEMO · 5F2C,". */

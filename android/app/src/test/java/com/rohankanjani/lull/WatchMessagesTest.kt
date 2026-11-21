@@ -28,6 +28,9 @@ class WatchMessagesTest {
             // From the watch's Remote, which says what was changed on it.
             WatchCommand.Remote(cool, side, setOf(RemoteSetting.TIME, RemoteSetting.FAN)) to
                 """{"bedJet":"6B0D4C2E-1A55-4D8E-9C71-0F2A7E3B5D10","changed":["fan","time"],"fanPercent":40,"kind":"remote","minutes":30,"mode":"cool","temperature":44}""",
+            // With a time picked on it to turn off at, for the phone to remember.
+            WatchCommand.Remote(cool, side, setOf(RemoteSetting.TIME), endMinute = 480) to
+                """{"bedJet":"6B0D4C2E-1A55-4D8E-9C71-0F2A7E3B5D10","changed":["time"],"endMinute":480,"fanPercent":40,"kind":"remote","minutes":30,"mode":"cool","temperature":44}""",
             WatchCommand.Refresh to """{"kind":"refresh"}""",
         )
         for ((command, json) in cases) {
@@ -41,6 +44,15 @@ class WatchMessagesTest {
         val cool = RemotePreset(Mode.COOL, minutes = 30, temperature = 44, fanPercent = 40)
         val json = """{"changed":["fan","sparkle"],"fanPercent":40,"kind":"remote","minutes":30,"mode":"cool","temperature":44}"""
         assertEquals(WatchCommand.Remote(cool, null, setOf(RemoteSetting.FAN)), WatchCommand.from(json.toByteArray()))
+    }
+
+    @Test
+    fun aTimeThatIsntAMinuteOfTheDayIsLeftOut() {
+        val cool = RemotePreset(Mode.COOL, minutes = 30, temperature = 44, fanPercent = 40)
+        for (end in listOf("1440", "-1", "\"8:00\"", "7.5", "null")) {
+            val json = """{"endMinute":$end,"fanPercent":40,"kind":"remote","minutes":30,"mode":"cool","temperature":44}"""
+            assertEquals(end, WatchCommand.Remote(cool, null), WatchCommand.from(json.toByteArray()))
+        }
     }
 
     @Test

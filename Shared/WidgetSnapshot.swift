@@ -196,6 +196,8 @@ struct WidgetBedJet: Codable, Equatable, Identifiable {
     var generation = Generation.v3
     /// The last two days of its history, for a Last Night widget set to it.
     var recentHistory: [HistoryEntry] = []
+    /// The time of day last picked to turn the air off at, as a minute of the day, where the watch's Remote starts air.
+    var pickedEndMinute: Int?
 
     /// What it is doing at `date`. Lull lets go of the BedJet when it leaves the screen, so this plays out by the clock.
     func live(at date: Date) -> LiveStatus? {
@@ -213,6 +215,7 @@ extension WidgetBedJet {
         tonight = try values.decodeIfPresent(Schedule.self, forKey: .tonight)
         generation = try values.decodeIfPresent(Generation.self, forKey: .generation) ?? .v3
         recentHistory = try values.decodeIfPresent([HistoryEntry].self, forKey: .recentHistory) ?? []
+        pickedEndMinute = try values.decodeIfPresent(Int.self, forKey: .pickedEndMinute)
     }
 }
 

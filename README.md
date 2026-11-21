@@ -12,10 +12,13 @@ room, or run out of battery; the night keeps going.
 [Google Play](https://play.google.com/store/apps/details?id=com.rohankanjani.lull)
 
 - **Schedules**: build a night out of phases (Cool, Heat, Gentle heat, Turbo, Dry, Pause), each with
-  its own temperature, fan speed and duration, and see the whole curve at a glance.
+  its own temperature, fan speed and duration, and see the whole curve at a glance. Give a schedule a wake time
+  and its phases stretch or shrink in proportion to end then, whenever you start the night; a BedJet 3 keeps to it
+  by its own clock. Phases marked as a fixed length, such as a quick cooldown or a morning warm-up, keep theirs.
 - **Runs on the device**: tonight's schedule is written into one of a BedJet 3's three program slots, or into a
   BedJet V2's single sequence. The V2 has no Gentle heat or Dry, and only Heat has an adjustable temperature.
-- **Remote**: a direct remote for mode, temperature, fan and shut-off timer.
+- **Remote**: a direct remote for mode, temperature, fan and shut-off timer, which can count down or turn off at a
+  time of day.
 - **History**: every change through the night, with the time and room temperature, so the morning
   after you can see what you picked and when.
 - **Widgets**: tonight's schedule and where the night is up to on the Home Screen, Lock Screen and in
@@ -28,12 +31,17 @@ room, or run out of battery; the night keeps going.
 - **Live Activity**: while a night or the Remote is running, its time left shows in the Dynamic Island and on the
   Lock Screen, with both sides of the bed together when two BedJets run. On Android, a Live Update in the status bar
   does the same.
+- **Automations**: Shortcuts actions on iPhone, and intents for apps such as Tasker on Android, to start a
+  schedule, preheat, set the air or turn it off, without opening Lull. [docs/AUTOMATIONS.md](docs/AUTOMATIONS.md)
+  lists them.
 - **Two phones, one BedJet**: the BedJet only accepts one connection, so Lull hands it over between
   phones automatically, iPhone or Android.
 - **Your BedJet, never a neighbour's**: you pick your BedJet from the ones nearby, and Lull only ever
   connects to the units you picked. If yours is away, Lull says so rather than taking another.
 - **Several BedJets**: one on each side of the bed? Add both and give them nicknames. They stay connected,
   each runs its own night and keeps its own history, and the name at the top of every screen switches between them.
+- **Firmware updates**: ask a BedJet 3 to check for newer firmware, and give it the Wi-Fi network it downloads
+  updates over, without the official app. The BedJet fetches the update itself; Lull never touches the internet.
 - **Private**: Bluetooth only. No accounts, analytics, or network calls.
 
 > Lull is an independent project and is not affiliated with or endorsed by BedJet LLC.
@@ -59,6 +67,7 @@ agents read before working here.
 | `android/bedjetkit/` | Kotlin port of BedJetKit: the same protocols, simulated BedJet and tests |
 | `fastlane/` | Release lanes for both stores, and both store listings (`metadata/` and `metadata/android/`) |
 | `docs/BEDJET_V2_PROTOCOL.md` | The BedJet V2 protocol, how it was worked out, and what is still unconfirmed |
+| `docs/BEDJET_3_FIRMWARE.md` | How a BedJet 3 is given Wi-Fi and asked to update its firmware, and how that was worked out |
 | `screenshots/`, `app-store-screenshots/` | Marketing and App Store screenshots |
 
 ## Getting started

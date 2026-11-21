@@ -80,7 +80,8 @@ class WatchErrandTest {
             prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE),
             linkPrefs = context.getSharedPreferences("$prefsName.link", Context.MODE_PRIVATE),
         )
-        return AppModel(context, LaunchOptions(), storage, demoMode = false, makesLink = { unit(it.unit!!) },
+        // A starter schedule's wake time can be more than 16 hours away, which would make starting a night depend on the time of day.
+        return AppModel(context, LaunchOptions(noWakeTimes = true), storage, demoMode = false, makesLink = { unit(it.unit!!) },
             discovery = { DemoDiscovery(listOf(mine, partners)) }, onScreen = onScreen).also { launched += it }
     }
 
@@ -103,10 +104,14 @@ class WatchErrandTest {
         return bedJet
     }
 
+    /** The built-in schedules as these tests' launches start with them, without wake times (`noWakeTimes`). */
+    private val startingSchedules = Schedule.templates.map { it.copy(wakeTime = null) }
+
     /** Lull as an earlier launch left it, with just [saved] chosen. */
     private fun save(saved: SavedBedJet) {
         val json = buildJsonObject {
-            put("schedules", AppModel.json.encodeToJsonElement(ListSerializer(Schedule.serializer()), Schedule.templates))
+            // The schedules Lull starts with here, without wake times, so the nights these tests start don't depend on the hour.
+            put("schedules", AppModel.json.encodeToJsonElement(ListSerializer(Schedule.serializer()), startingSchedules))
             put("fleet", buildJsonObject {
                 put("bedJets", buildJsonArray { add(AppModel.json.encodeToJsonElement(SavedBedJet.serializer(), saved)) })
                 put("selected", saved.id)
@@ -129,6 +134,27 @@ class WatchErrandTest {
         // Let go again, so another phone can take the BedJet over.
         assertTrue(unit(mine.id).stops > stops)
         assertFalse(bedJet.isConnected)
+    }
+
+    @Test
+    fun aNightWithAWakeTimeEndsAtIt() = onMain {
+        val model = launch()
+        val bedJet = chosen(mine, model)
+        // Two hours of cooling, ending three hours from now whatever the usual bedtime is: each hour stretches to an hour and a half.
+        val wake = (Format.minuteOfDay(System.currentTimeMillis()) + 180) % 1440
+        val schedule = Schedule("Wake", listOf(Phase(Mode.COOL, minutes = 60), Phase(Mode.COOL, fanPercent = 20, minutes = 60)), wakeTime = wake)
+        model.save(schedule)
+        bedJet.tonightID = schedule.id
+
+        val reply = model.runErrand(WatchCommand.StartNight(bedJet.id))
+        assertEquals(WatchReply.done, reply)
+        val run = bedJet.run!!
+        assertEquals(run.schedule.minutesToWake(startingAt = Format.minuteOfDay(run.startedAt)), run.schedule.totalMinutes)
+        assertTrue("three hours from the start, a minute either way", run.schedule.totalMinutes in 179..180)
+        // The BedJet is given tonight's lengths, and keeps to the wake time itself.
+        val stored = bedJet.deviceSlots[bedJet.slot!!]?.steps
+        assertEquals(run.schedule.phases.first().step, stored?.first())
+        assertEquals(schedule.phases.last().step(endingAt = wake), stored?.last())
     }
 
     @Test
@@ -198,6 +224,30 @@ class WatchErrandTest {
         assertEquals(70, bedJet.status?.targetTemperature)
         assertEquals(35, bedJet.status?.fanPercent)
         assertFalse(bedJet.isConnected)
+    }
+
+    @Test
+    fun aTimePickedOnTheWatchIsWhereTheRemoteTurnsOffNext() = onMain {
+        val model = launch()
+        model.remoteTimerShowsTime = true
+        val bedJet = chosen(mine, model)
+        model.appMovedToBackground()
+
+        // The watch sends the minutes until the time picked on it, and the time itself to remember.
+        val end = Format.minuteOfDay(System.currentTimeMillis() + 2 * 3_600_000L)
+        val preset = RemotePreset(Mode.COOL, minutes = Format.minutes(end, System.currentTimeMillis()), temperature = 44, fanPercent = 40)
+        val reply = model.runErrand(WatchCommand.Remote(preset, bedJet.id, endMinute = end))
+        assertEquals(WatchReply.done, reply)
+        assertEquals(end, bedJet.pickedEndMinute)
+
+        // Turned off and on again on the phone's Remote, the air turns off at it.
+        model.appBecameActive()
+        waitUntil("it to connect") { bedJet.isConnected }
+        bedJet.setMode(Mode.STANDBY)
+        bedJet.setMode(Mode.COOL)
+        waitUntil("Cool to turn off at the time picked on the watch") {
+            kotlin.math.abs((bedJet.status?.remainingSeconds ?: 0) - 120 * 60) <= 90
+        }
     }
 
     @Test
@@ -351,7 +401,7 @@ class WatchErrandTest {
     @Test
     fun whatARefreshFindsWentWrongWaitsForLullToBeOpened() = onMain {
         // Started from this phone an hour ago, and ended early by the BedJet since.
-        val night = ActiveRun(Schedule.templates[0], startedAt = System.currentTimeMillis() - 3_600_000)
+        val night = ActiveRun(startingSchedules[0], startedAt = System.currentTimeMillis() - 3_600_000)
         save(SavedBedJet(unit = mine.id, name = mine.name, generation = Generation.V3, run = night))
         val model = launch(onScreen = false)
         val bedJet = model.bedJet!!
@@ -368,7 +418,7 @@ class WatchErrandTest {
     @Test
     fun whatAnErrandFindsBeforeItsOwnCommandIsntHowItWent() = onMain {
         // Started from this phone an hour ago, and ended early by the BedJet since.
-        val night = ActiveRun(Schedule.templates[0], startedAt = System.currentTimeMillis() - 3_600_000)
+        val night = ActiveRun(startingSchedules[0], startedAt = System.currentTimeMillis() - 3_600_000)
         save(SavedBedJet(unit = mine.id, name = mine.name, generation = Generation.V3, run = night))
         val model = launch(onScreen = false)
         val bedJet = model.bedJet!!
@@ -401,5 +451,75 @@ class WatchErrandTest {
         assertEquals(sent, link.sent)
         link.release()
         change.await()
+    }
+
+    @Test
+    fun aNightThatEndedIsNotedWhenAnAutomationFindsIt() = onMain {
+        // Started from this phone an hour ago, and ended early by the BedJet since.
+        val night = ActiveRun(startingSchedules[0], startedAt = System.currentTimeMillis() - 3_600_000)
+        save(SavedBedJet(unit = mine.id, name = mine.name, generation = Generation.V3, run = night))
+        val model = launch(onScreen = false)
+        val bedJet = model.bedJet!!
+        // As over Bluetooth, the BedJet says what it's doing a moment after it connects, once the action waits to hear it.
+        // That wait is under way, but the action isn't ending the night, so the early end is recorded and said.
+        val link = unit(mine.id)
+        link.reports = false
+        val action = async { model.perform(AutomationRequest.LightRing(on = true), bedJet) }
+        waitUntil("the BedJet to connect") { bedJet.isConnected }
+        delay(300)
+        assertTrue(bedJet.isBusy)
+        link.reports = true
+
+        action.await()
+        assertNull(bedJet.run)
+        assertTrue(bedJet.history.any { it.event is HistoryEntry.Event.ScheduleEnded })
+        assertTrue(model.errorMessage?.startsWith("Your BedJet turned off") == true)
+    }
+
+    @Test
+    fun aNightThatEndedIsNotedWhenTheRemoteIsUsedAsLullConnects() = onMain {
+        // Started from this phone an hour ago, and ended early by the BedJet since.
+        val night = ActiveRun(startingSchedules[0], startedAt = System.currentTimeMillis() - 3_600_000)
+        save(SavedBedJet(unit = mine.id, name = mine.name, generation = Generation.V3, run = night))
+        val link = unit(mine.id)
+        link.reports = false
+        val model = launch()
+        val bedJet = model.bedJet!!
+        waitUntil("the BedJet to connect") { bedJet.isConnected }
+        // The fan is changed the moment Lull is opened, and the BedJet's first report arrives while that's under way.
+        link.holdsSends = true
+        val change = async { bedJet.setFan(60) }
+        waitUntil("the fan change to be in flight") { link.isHolding }
+        link.reports = true
+        waitUntil("the BedJet to report") { bedJet.run == null }
+        link.release()
+        change.await()
+
+        assertTrue(bedJet.history.any { (it.event as? HistoryEntry.Event.ScheduleEnded)?.ending is HistoryEntry.Ending.Early })
+        assertTrue(model.errorMessage?.startsWith("Your BedJet turned off") == true)
+    }
+
+    @Test
+    fun aNightLullEndsIsNotedOnceThoughTheBedJetSaysSoFirst() = onMain {
+        // Started from this phone an hour ago, and still running as far as Lull knows.
+        val night = ActiveRun(startingSchedules[0], startedAt = System.currentTimeMillis() - 3_600_000)
+        save(SavedBedJet(unit = mine.id, name = mine.name, generation = Generation.V3, run = night))
+        val link = unit(mine.id)
+        link.reports = false
+        val model = launch()
+        val bedJet = model.bedJet!!
+        waitUntil("the BedJet to connect") { bedJet.isConnected && link.lastStatus != null }
+        link.holdsSends = true
+        val ending = async { bedJet.endNight() }
+        waitUntil("End Night to be in flight") { link.isHolding }
+        // The BedJet's report that the schedule stopped arrives before the command returns.
+        link.report(link.lastStatus!!)
+        assertNull(bedJet.run)
+        link.release()
+        ending.await()
+
+        val ends = bedJet.history.mapNotNull { (it.event as? HistoryEntry.Event.ScheduleEnded)?.ending }
+        assertEquals(listOf(HistoryEntry.Ending.ByYou), ends)
+        assertNull(model.errorMessage)
     }
 }

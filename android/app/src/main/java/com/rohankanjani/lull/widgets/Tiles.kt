@@ -9,7 +9,9 @@ import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.NightsStay
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -17,6 +19,7 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import com.rohankanjani.lull.AppCommands
+import com.rohankanjani.lull.AutomationCall
 import com.rohankanjani.lull.LullTab
 import com.rohankanjani.lull.WidgetSnapshot
 
@@ -62,7 +65,10 @@ fun requestTileUpdates(context: Context) {
     TileService.requestListeningState(context, ComponentName(context, StartNightTile::class.java))
 }
 
-/** Lull's actions on a long press of its icon, and for the assistant: Start Night and the Remote. */
+/**
+ * Lull's actions on a long press of its icon, and for the assistant: Start Night, Turn On, Turn Off and the Remote,
+ * as the iPhone app offers them to Siri. They open Lull, which does them on screen.
+ */
 fun publishShortcuts(context: Context) {
     ShortcutManagerCompat.setDynamicShortcuts(
         context,
@@ -72,6 +78,18 @@ fun publishShortcuts(context: Context) {
                 .setLongLabel("Start tonight's schedule")
                 .setIcon(IconCompat.createWithBitmap(Icons.Filled.NightsStay.toBitmap(Color(0xFF4DA3FF), 96)))
                 .setIntent(AppCommands.startNightIntent(context))
+                .build(),
+            ShortcutInfoCompat.Builder(context, "turn-on")
+                .setShortLabel("Turn On")
+                .setLongLabel("Turn on your BedJet")
+                .setIcon(IconCompat.createWithBitmap(Icons.Filled.PowerSettingsNew.toBitmap(Color(0xFF4DA3FF), 96)))
+                .setIntent(AppCommands.actionIntent(context, AutomationCall.TURN_ON))
+                .build(),
+            ShortcutInfoCompat.Builder(context, "turn-off")
+                .setShortLabel("Turn Off")
+                .setLongLabel("Turn off your BedJet")
+                .setIcon(IconCompat.createWithBitmap(Icons.Filled.Bedtime.toBitmap(Color(0xFF4DA3FF), 96)))
+                .setIntent(AppCommands.actionIntent(context, AutomationCall.TURN_OFF))
                 .build(),
             ShortcutInfoCompat.Builder(context, "remote")
                 .setShortLabel("Remote")

@@ -52,11 +52,36 @@ struct OpenLullIntent: AppIntent {
     }
 }
 
-/// Starts tonight's schedule. Lull needs to be open to reach the BedJet over Bluetooth, so this opens it.
+#if os(watchOS)
+/// Starts tonight's schedule from the watch's Shortcuts. The watch asks Lull on the iPhone, so this opens Lull on the watch.
+/// On the iPhone, Start Night runs without opening Lull (`Lull/BedJetIntents.swift`).
 struct StartNightIntent: AppIntent {
     static let title: LocalizedStringResource = "Start Night"
     static let description = IntentDescription("Opens Lull and starts tonight's schedule on your BedJet.")
     static let openAppWhenRun = true
+
+    /// The BedJet to start it on; the one on screen in Lull when left out.
+    @Parameter(title: "BedJet")
+    var bedJet: BedJetEntity?
+
+    init() {}
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        AppCommands.send(.startNight(bedJet?.id))
+        return .result()
+    }
+}
+#endif
+
+/// What the Start Night control and the widgets' Start buttons run. They may run it in a widget extension, which can't
+/// reach the BedJet, so this opens Lull to start tonight's schedule there. Shortcuts has Start Night
+/// (`StartNightIntent`), which on the iPhone runs without opening Lull.
+struct StartNightInLullIntent: AppIntent {
+    static let title: LocalizedStringResource = "Start Night in Lull"
+    static let description = IntentDescription("Opens Lull and starts tonight's schedule on your BedJet.")
+    static let openAppWhenRun = true
+    static let isDiscoverable = false
 
     /// The BedJet to start it on, such as the one a Tonight widget shows; the one on screen in Lull when left out.
     @Parameter(title: "BedJet")

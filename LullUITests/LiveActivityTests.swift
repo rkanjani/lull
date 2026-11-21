@@ -9,6 +9,9 @@ final class LiveActivityTests: XCTestCase {
 
     override func setUp() {
         continueAfterFailure = false
+        // Without the starter schedules' wake times, as LiveUpdateTest.kt launches: one more than 16 hours away can't be
+        // reached, so starting a night would otherwise pass or fail by the time of day.
+        app.launchArguments = ["-noWakeTimes"]
         app.launch()
     }
 
