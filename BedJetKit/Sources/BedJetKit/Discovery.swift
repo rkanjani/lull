@@ -34,6 +34,7 @@ public protocol BedJetDiscovery: AnyObject {
     func stop()
 }
 
+#if !os(watchOS)
 /// Finds real BedJets over Bluetooth.
 @MainActor
 public final class BLEDiscovery: NSObject, BedJetDiscovery {
@@ -100,6 +101,7 @@ extension BLEDiscovery: CBCentralManagerDelegate {
         }
     }
 }
+#endif
 
 /// Simulated BedJets nearby, for demo mode and tests. They are all there as soon as it starts.
 @MainActor

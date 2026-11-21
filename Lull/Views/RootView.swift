@@ -22,7 +22,12 @@ struct RootView: View {
             if let id = LullTab.bedJet(in: url) { model.select(id) }
             if let tab = LullTab(url: url) { selectedTab = tab }
         }
-        .onAppear { AppCommands.handler = handle }
+        .onAppear {
+            AppCommands.handler = handle
+            // Lull started off screen (prewarmed, or woken by the watch) and is now first shown already active, which
+            // onChange never sees.
+            if scenePhase == .active { model.appBecameActive() }
+        }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background: model.appMovedToBackground()

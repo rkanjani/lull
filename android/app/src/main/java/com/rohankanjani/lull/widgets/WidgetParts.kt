@@ -43,8 +43,6 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import com.rohankanjani.lull.Format
-import com.rohankanjani.lull.LiveStatus
-import com.rohankanjani.lull.LullTab
 import com.rohankanjani.lull.R
 import com.rohankanjani.lull.Phase
 import com.rohankanjani.lull.WidgetSnapshot
@@ -57,7 +55,6 @@ import com.rohankanjani.lull.ui.tint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.ZoneId
@@ -67,11 +64,6 @@ val WidgetPadding = 16.dp
 
 fun widgetText(size: TextUnit, color: Color = Color.White, weight: FontWeight = FontWeight.Normal) =
     TextStyle(color = ColorProvider(color), fontSize = size, fontWeight = weight)
-
-fun clock(millis: Long): String {
-    val time = Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).toLocalTime()
-    return Format.clock(time.hour * 60 + time.minute)
-}
 
 /** An icon from the app, drawn at a size and colour. */
 @Composable
@@ -179,13 +171,6 @@ fun Countdown(end: Long, size: TextUnit, color: Color = Color.White) {
     // A view placed this way takes all the room it's given unless told its height.
     AndroidRemoteViews(views, GlanceModifier.height((size.value * 1.35f).dp))
 }
-
-/** "Ends 6:30 AM" through a night, "Turns off at 1:30 AM" for air from the Remote. */
-val LiveStatus.ending: String
-    get() = if (this is LiveStatus.Night) "Ends ${clock(endsAt)}" else "Turns off at ${clock(endsAt)}"
-
-/** Where a tap takes Lull: the Schedule for a night, the Remote for air. */
-val LiveStatus.tab: LullTab get() = if (this is LiveStatus.Night) LullTab.SCHEDULE else LullTab.REMOTE
 
 /**
  * Redraws every widget, and books the next redraw: through a running night every few minutes and at each

@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F1000000000000000000000A /* BedJetKit in Frameworks */ = {isa = PBXBuildFile; productRef = F1000000000000000000000B /* BedJetKit */; };
+		F1000000000000000000000C /* LullWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = F10000000000000000000001 /* LullWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		F2000000000000000000000A /* BedJetKit in Frameworks */ = {isa = PBXBuildFile; productRef = F2000000000000000000000B /* BedJetKit */; };
+		F2000000000000000000000C /* LullWatchWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = F20000000000000000000001 /* LullWatchWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A10000000000000000000010 /* BedJetKit in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000011 /* BedJetKit */; };
 		D1000000000000000000000A /* BedJetKit in Frameworks */ = {isa = PBXBuildFile; productRef = D1000000000000000000000B /* BedJetKit */; };
 		D1000000000000000000000C /* LullWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = D10000000000000000000001 /* LullWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -34,6 +38,34 @@
 			remoteGlobalIDString = D10000000000000000000006;
 			remoteInfo = LullWidgets;
 		};
+		F1000000000000000000000E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000000009 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F10000000000000000000006;
+			remoteInfo = LullWatch;
+		};
+		F2000000000000000000000E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000000009 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F20000000000000000000006;
+			remoteInfo = LullWatchWidgets;
+		};
+		F3000000000000000000000E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000000009 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F10000000000000000000006;
+			remoteInfo = LullWatch;
+		};
+		F4000000000000000000000E /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000000009 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F10000000000000000000006;
+			remoteInfo = LullWatch;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -48,6 +80,28 @@
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F1000000000000000000000D /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				F1000000000000000000000C /* LullWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F2000000000000000000000D /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				F2000000000000000000000C /* LullWatchWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
@@ -55,9 +109,20 @@
 		B10000000000000000000001 /* LullUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LullUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C10000000000000000000001 /* LullTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LullTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D10000000000000000000001 /* LullWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = LullWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		F10000000000000000000001 /* LullWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LullWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F20000000000000000000001 /* LullWatchWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = LullWatchWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		F30000000000000000000001 /* LullWatchTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LullWatchTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F40000000000000000000001 /* LullWatchUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LullWatchUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A10000000000000000000013 /* Exceptions for "Lull" folder in "Lull" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = A10000000000000000000006 /* Lull */;
+		};
 		D10000000000000000000010 /* Exceptions for "LullWidgets" folder in "LullWidgets" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -65,11 +130,35 @@
 			);
 			target = D10000000000000000000006 /* LullWidgets */;
 		};
+		F20000000000000000000010 /* Exceptions for "LullWatchWidgets" folder in "LullWatchWidgets" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = F20000000000000000000006 /* LullWatchWidgets */;
+		};
+		D10000000000000000000011 /* Exceptions for "Shared" folder in "LullWidgets" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Shortcuts.swift,
+			);
+			target = D10000000000000000000006 /* LullWidgets */;
+		};
+		F20000000000000000000011 /* Exceptions for "Shared" folder in "LullWatchWidgets" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Shortcuts.swift,
+			);
+			target = F20000000000000000000006 /* LullWatchWidgets */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A10000000000000000000002 /* Lull */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A10000000000000000000013 /* Exceptions for "Lull" folder in "Lull" target */,
+			);
 			path = Lull;
 			sourceTree = "<group>";
 		};
@@ -93,7 +182,34 @@
 		};
 		E10000000000000000000002 /* Shared */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				D10000000000000000000011 /* Exceptions for "Shared" folder in "LullWidgets" target */,
+				F20000000000000000000011 /* Exceptions for "Shared" folder in "LullWatchWidgets" target */,
+			);
 			path = Shared;
+			sourceTree = "<group>";
+		};
+		F10000000000000000000002 /* LullWatch */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = LullWatch;
+			sourceTree = "<group>";
+		};
+		F20000000000000000000002 /* LullWatchWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				F20000000000000000000010 /* Exceptions for "LullWatchWidgets" folder in "LullWatchWidgets" target */,
+			);
+			path = LullWatchWidgets;
+			sourceTree = "<group>";
+		};
+		F30000000000000000000002 /* LullWatchTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = LullWatchTests;
+			sourceTree = "<group>";
+		};
+		F40000000000000000000002 /* LullWatchUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = LullWatchUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -115,6 +231,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F10000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F1000000000000000000000A /* BedJetKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F20000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F2000000000000000000000A /* BedJetKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -124,9 +256,13 @@
 				A10000000000000000000002 /* Lull */,
 				E10000000000000000000002 /* Shared */,
 				D10000000000000000000002 /* LullWidgets */,
+				F10000000000000000000002 /* LullWatch */,
+				F20000000000000000000002 /* LullWatchWidgets */,
 				A10000000000000000000005 /* Products */,
 				B10000000000000000000003 /* LullUITests */,
 				C10000000000000000000003 /* LullTests */,
+				F30000000000000000000002 /* LullWatchTests */,
+				F40000000000000000000002 /* LullWatchUITests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -137,6 +273,10 @@
 				B10000000000000000000001 /* LullUITests.xctest */,
 				C10000000000000000000001 /* LullTests.xctest */,
 				D10000000000000000000001 /* LullWidgets.appex */,
+				F10000000000000000000001 /* LullWatch.app */,
+				F20000000000000000000001 /* LullWatchWidgets.appex */,
+				F30000000000000000000001 /* LullWatchTests.xctest */,
+				F40000000000000000000001 /* LullWatchUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -152,11 +292,13 @@
 				A10000000000000000000003 /* Frameworks */,
 				A10000000000000000000008 /* Resources */,
 				D1000000000000000000000D /* Embed Foundation Extensions */,
+				F1000000000000000000000D /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				D1000000000000000000000F /* PBXTargetDependency */,
+				F1000000000000000000000F /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				A10000000000000000000002 /* Lull */,
@@ -232,6 +374,94 @@
 			productReference = D10000000000000000000001 /* LullWidgets.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		F10000000000000000000006 /* LullWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F10000000000000000000007 /* Build configuration list for PBXNativeTarget "LullWatch" */;
+			buildPhases = (
+				F10000000000000000000004 /* Sources */,
+				F10000000000000000000003 /* Frameworks */,
+				F10000000000000000000005 /* Resources */,
+				F2000000000000000000000D /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F2000000000000000000000F /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				F10000000000000000000002 /* LullWatch */,
+				E10000000000000000000002 /* Shared */,
+			);
+			name = LullWatch;
+			packageProductDependencies = (
+				F1000000000000000000000B /* BedJetKit */,
+			);
+			productName = LullWatch;
+			productReference = F10000000000000000000001 /* LullWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
+		F20000000000000000000006 /* LullWatchWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F20000000000000000000007 /* Build configuration list for PBXNativeTarget "LullWatchWidgets" */;
+			buildPhases = (
+				F20000000000000000000004 /* Sources */,
+				F20000000000000000000003 /* Frameworks */,
+				F20000000000000000000005 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				F20000000000000000000002 /* LullWatchWidgets */,
+				E10000000000000000000002 /* Shared */,
+			);
+			name = LullWatchWidgets;
+			packageProductDependencies = (
+				F2000000000000000000000B /* BedJetKit */,
+			);
+			productName = LullWatchWidgets;
+			productReference = F20000000000000000000001 /* LullWatchWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		F30000000000000000000006 /* LullWatchTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F30000000000000000000007 /* Build configuration list for PBXNativeTarget "LullWatchTests" */;
+			buildPhases = (
+				F30000000000000000000004 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F3000000000000000000000F /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				F30000000000000000000002 /* LullWatchTests */,
+			);
+			name = LullWatchTests;
+			productName = LullWatchTests;
+			productReference = F30000000000000000000001 /* LullWatchTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		F40000000000000000000006 /* LullWatchUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F40000000000000000000007 /* Build configuration list for PBXNativeTarget "LullWatchUITests" */;
+			buildPhases = (
+				F40000000000000000000004 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F4000000000000000000000F /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				F40000000000000000000002 /* LullWatchUITests */,
+			);
+			name = LullWatchUITests;
+			productName = LullWatchUITests;
+			productReference = F40000000000000000000001 /* LullWatchUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -256,6 +486,20 @@
 					D10000000000000000000006 = {
 						CreatedOnToolsVersion = 26.2;
 					};
+					F10000000000000000000006 = {
+						CreatedOnToolsVersion = 27.1;
+					};
+					F20000000000000000000006 = {
+						CreatedOnToolsVersion = 27.1;
+					};
+					F30000000000000000000006 = {
+						CreatedOnToolsVersion = 27.1;
+						TestTargetID = F10000000000000000000006;
+					};
+					F40000000000000000000006 = {
+						CreatedOnToolsVersion = 27.1;
+						TestTargetID = F10000000000000000000006;
+					};
 				};
 			};
 			buildConfigurationList = A1000000000000000000000D /* Build configuration list for PBXProject "Lull" */;
@@ -279,6 +523,10 @@
 				B10000000000000000000004 /* LullUITests */,
 				C10000000000000000000004 /* LullTests */,
 				D10000000000000000000006 /* LullWidgets */,
+				F10000000000000000000006 /* LullWatch */,
+				F20000000000000000000006 /* LullWatchWidgets */,
+				F30000000000000000000006 /* LullWatchTests */,
+				F40000000000000000000006 /* LullWatchUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -292,6 +540,20 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		D10000000000000000000005 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F10000000000000000000005 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F20000000000000000000005 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -329,6 +591,34 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F10000000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F20000000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F30000000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F40000000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -346,6 +636,26 @@
 			isa = PBXTargetDependency;
 			target = D10000000000000000000006 /* LullWidgets */;
 			targetProxy = D1000000000000000000000E /* PBXContainerItemProxy */;
+		};
+		F1000000000000000000000F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F10000000000000000000006 /* LullWatch */;
+			targetProxy = F1000000000000000000000E /* PBXContainerItemProxy */;
+		};
+		F2000000000000000000000F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F20000000000000000000006 /* LullWatchWidgets */;
+			targetProxy = F2000000000000000000000E /* PBXContainerItemProxy */;
+		};
+		F3000000000000000000000F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F10000000000000000000006 /* LullWatch */;
+			targetProxy = F3000000000000000000000E /* PBXContainerItemProxy */;
+		};
+		F4000000000000000000000F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F10000000000000000000006 /* LullWatch */;
+			targetProxy = F4000000000000000000000E /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -400,6 +710,7 @@
 				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 7786XZ3V4B;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Lull/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Lull;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
@@ -432,6 +743,7 @@
 				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 7786XZ3V4B;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Lull/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Lull;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.lifestyle";
@@ -570,6 +882,194 @@
 			};
 			name = Release;
 		};
+		F10000000000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = LullWatch/LullWatch.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = 7786XZ3V4B;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Lull;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.rohankanjani.lull;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rohankanjani.lull.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
+			};
+			name = Debug;
+		};
+		F10000000000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = LullWatch/LullWatch.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = 7786XZ3V4B;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Lull;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.rohankanjani.lull;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rohankanjani.lull.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
+			};
+			name = Release;
+		};
+		F20000000000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = LullWatchWidgets/LullWatchWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = 7786XZ3V4B;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = LullWatchWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Lull;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rohankanjani.lull.watchkitapp.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
+			};
+			name = Debug;
+		};
+		F20000000000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = LullWatchWidgets/LullWatchWidgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = 7786XZ3V4B;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = LullWatchWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Lull;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rohankanjani.lull.watchkitapp.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
+			};
+			name = Release;
+		};
+		F30000000000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = 7786XZ3V4B;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rohankanjani.lull.watchkitapp.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LullWatch.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LullWatch";
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
+			};
+			name = Debug;
+		};
+		F30000000000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = 7786XZ3V4B;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rohankanjani.lull.watchkitapp.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LullWatch.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LullWatch";
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
+			};
+			name = Release;
+		};
+		F40000000000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = 7786XZ3V4B;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rohankanjani.lull.watchkitapp.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = LullWatch;
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
+			};
+			name = Debug;
+		};
+		F40000000000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = 7786XZ3V4B;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rohankanjani.lull.watchkitapp.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = LullWatch;
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -618,6 +1118,42 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		F10000000000000000000007 /* Build configuration list for PBXNativeTarget "LullWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F10000000000000000000008 /* Debug */,
+				F10000000000000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F20000000000000000000007 /* Build configuration list for PBXNativeTarget "LullWatchWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F20000000000000000000008 /* Debug */,
+				F20000000000000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F30000000000000000000007 /* Build configuration list for PBXNativeTarget "LullWatchTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F30000000000000000000008 /* Debug */,
+				F30000000000000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F40000000000000000000007 /* Build configuration list for PBXNativeTarget "LullWatchUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F40000000000000000000008 /* Debug */,
+				F40000000000000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -633,6 +1169,14 @@
 			productName = BedJetKit;
 		};
 		D1000000000000000000000B /* BedJetKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BedJetKit;
+		};
+		F1000000000000000000000B /* BedJetKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BedJetKit;
+		};
+		F2000000000000000000000B /* BedJetKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = BedJetKit;
 		};

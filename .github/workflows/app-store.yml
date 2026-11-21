@@ -61,3 +61,4 @@ jobs:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
           DIST_CERT_P12_BASE64: ${{ secrets.DIST_CERT_P12_BASE64 }}
           DIST_CERT_PASSWORD: ${{ secrets.DIST_CERT_PASSWORD }}
+          WATCH_APPS_RELEASE: ${{ vars.WATCH_APPS_RELEASE }}

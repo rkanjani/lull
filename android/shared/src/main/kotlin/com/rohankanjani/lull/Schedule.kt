@@ -1,5 +1,7 @@
 package com.rohankanjani.lull
 
+import android.content.Context
+import android.text.format.DateFormat
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -176,8 +178,16 @@ val Mode.maxMinutes: Int
     }
 
 object Format {
-    /** Follows the phone's 12/24-hour setting; the activity updates it whenever Lull comes on screen. */
+    /** Follows the phone's or watch's 12/24-hour setting, as [followClockSetting] last read it. */
     var use24Hour by mutableStateOf(false)
+
+    /**
+     * Reads the 12/24-hour setting. iOS formats times by the system's setting itself; here each place that draws times
+     * reads it first: Lull as it starts and comes on screen, and the watch app, its tile and its complication.
+     */
+    fun followClockSetting(context: Context) {
+        use24Hour = DateFormat.is24HourFormat(context)
+    }
 
     fun clock(minuteOfDay: Int): String {
         val minute = ((minuteOfDay % 1440) + 1440) % 1440

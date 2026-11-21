@@ -3,37 +3,6 @@ import BedJetKit
 import SwiftUI
 import WidgetKit
 
-struct NightEntry: TimelineEntry {
-    let date: Date
-    let snapshot: WidgetSnapshot
-}
-
-/// Reads what the app last saved and lays out the night ahead of time: the BedJet keeps to its schedule by the
-/// clock, so every phase change can be drawn without waking the app. Draws the BedJet the widget is set to.
-struct NightProvider: AppIntentTimelineProvider {
-    var preview = WidgetSnapshot.preview()
-
-    func placeholder(in context: Context) -> NightEntry {
-        NightEntry(date: Date(), snapshot: preview)
-    }
-
-    func snapshot(for configuration: BedJetConfiguration, in context: Context) async -> NightEntry {
-        // The gallery shows the sample BedJets, which a real one picked for the widget isn't among.
-        if context.isPreview { return NightEntry(date: Date(), snapshot: preview) }
-        let snapshot = WidgetSnapshot.load() ?? WidgetSnapshot()
-        return NightEntry(date: Date(), snapshot: snapshot.showing(configuration.bedJet?.id))
-    }
-
-    func timeline(for configuration: BedJetConfiguration, in context: Context) async -> Timeline<NightEntry> {
-        let snapshot = (WidgetSnapshot.load() ?? WidgetSnapshot()).showing(configuration.bedJet?.id)
-        let now = Date()
-        let entries = snapshot.redraws(from: now).map { NightEntry(date: $0, snapshot: snapshot) }
-        // The app redraws the widgets whenever what they show changes. Last night also moves on at midnight.
-        let midnight = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: now)) ?? now
-        return Timeline(entries: entries, policy: .after(max(midnight, entries.last?.date ?? now)))
-    }
-}
-
 struct TonightWidget: Widget {
     var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: "Tonight", intent: BedJetConfiguration.self, provider: NightProvider()) { entry in
@@ -59,12 +28,14 @@ struct TonightView: View {
 
     var body: some View {
         Group {
-            if !family.isAccessory, !showsBackground, let bedJet {
+            if family.isAccessory {
+                TonightAccessory(snapshot: snapshot, now: now)
+            } else if !showsBackground, let bedJet {
                 // StandBy: no card behind it, and read from across the room.
                 BedJetSummary(bedJet: bedJet, snapshot: snapshot, now: now, isStandBy: true)
             } else if let run = snapshot.run(at: now) {
                 running(run)
-            } else if !family.isAccessory, case .air? = live, let bedJet {
+            } else if case .air? = live, let bedJet {
                 // Air from the Remote, with its timer. The Lock Screen keeps to the night.
                 BedJetSummary(bedJet: bedJet, snapshot: snapshot, now: now, isMedium: family != .systemSmall)
             } else if let schedule = snapshot.tonight {
@@ -98,27 +69,6 @@ struct TonightView: View {
         ].compactMap { $0 }.joined(separator: ", "))
 
         switch family {
-        case .accessoryCircular:
-            Gauge(value: progress) {
-                Image(systemName: "moon.fill")
-            } currentValueLabel: {
-                Image(systemName: mode.symbol).font(.system(size: 16, weight: .semibold))
-            }
-            .gaugeStyle(.accessoryCircularCapacity)
-            .accessibilityLabel(spoken)
-        case .accessoryRectangular:
-            VStack(alignment: .leading, spacing: 1) {
-                Text(run.schedule.name).font(.headline).widgetAccentable()
-                // The mode shows as its symbol; there's no room for its name beside the time.
-                Label("\(Format.shortDuration(minutesLeft)) left", systemImage: mode.symbol)
-                Text("Ends \(wake)").foregroundStyle(.secondary)
-            }
-            .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(spoken)
-        case .accessoryInline:
-            Label("\(mode.activity) · ends \(wake)", systemImage: mode.symbol)
         case .systemSmall:
             VStack(alignment: .leading, spacing: 0) {
                 if let name = snapshot.headingName {
@@ -179,32 +129,6 @@ struct TonightView: View {
     private func planned(_ schedule: Schedule) -> some View {
         let spoken = snapshot.spoken("Tonight, \(schedule.name), \(schedule.spokenSummary)")
         switch family {
-        case .accessoryCircular:
-            ZStack {
-                AccessoryWidgetBackground()
-                VStack(spacing: 1) {
-                    Image(systemName: "moon.stars.fill").font(.system(size: 15, weight: .semibold))
-                    Text(Format.shortDuration(schedule.totalMinutes))
-                        .font(.system(size: 11, weight: .semibold))
-                        .minimumScaleFactor(0.7)
-                }
-                .padding(4)
-            }
-            .widgetAccentable()
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(spoken)
-        case .accessoryRectangular:
-            VStack(alignment: .leading, spacing: 1) {
-                Label(snapshot.headed("Tonight"), systemImage: "moon.stars.fill").font(.caption).foregroundStyle(.secondary)
-                Text(schedule.name).font(.headline).widgetAccentable()
-                Text(schedule.summary)
-            }
-            .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(spoken)
-        case .accessoryInline:
-            Label("Tonight: \(schedule.name)", systemImage: "moon.stars.fill")
         case .systemSmall:
             VStack(alignment: .leading, spacing: 0) {
                 // Stacked: a name and "Tonight" don't fit across a small widget together.
@@ -268,37 +192,19 @@ struct TonightView: View {
 
     // MARK: Empty
 
-    @ViewBuilder
     private var empty: some View {
-        switch family {
-        case .accessoryCircular:
-            ZStack {
-                AccessoryWidgetBackground()
-                Image(systemName: "moon.zzz.fill").font(.system(size: 18, weight: .semibold))
-            }
-            .accessibilityLabel("Lull, no schedule yet")
-        case .accessoryRectangular:
-            VStack(alignment: .leading) {
-                Text("Lull").font(.headline)
-                Text("No schedule yet")
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        case .accessoryInline:
-            Label("No schedule yet", systemImage: "moon.zzz.fill")
-        default:
-            VStack(alignment: .leading, spacing: 6) {
-                Image(systemName: "moon.zzz.fill")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Theme.secondary)
-                Spacer(minLength: 0)
-                Text("No schedule yet").font(.system(size: 17, weight: .semibold))
-                Text("Open Lull to plan how your night feels.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .accessibilityElement(children: .combine)
+        VStack(alignment: .leading, spacing: 6) {
+            Image(systemName: "moon.zzz.fill")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(Theme.secondary)
+            Spacer(minLength: 0)
+            Text("No schedule yet").font(.system(size: 17, weight: .semibold))
+            Text("Open Lull to plan how your night feels.")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.secondary)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: Parts
@@ -339,12 +245,6 @@ struct TonightView: View {
             }
         }
         .padding(.horizontal, -8)
-    }
-}
-
-extension WidgetFamily {
-    var isAccessory: Bool {
-        self == .accessoryCircular || self == .accessoryRectangular || self == .accessoryInline
     }
 }
 
