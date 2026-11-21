@@ -17,11 +17,28 @@ SIGNED_TARGETS = {
   "LullWatch" => "#{BUNDLE_ID}.watchkitapp",
   "LullWatchWidgets" => "#{BUNDLE_ID}.watchkitapp.widgets"
 }
+# The watch apps go out only once the WATCH_APPS_RELEASE repository variable is "true", after the store setup in
+# docs/RELEASING.md. Until then the iPhone and Android apps go out without them, so that setup never holds up a release.
+SHIPS_WATCH_APPS = ENV["WATCH_APPS_RELEASE"] == "true"
 TEAM_ID = "7786XZ3V4B"
 PROJECT = "Lull.xcodeproj"
 PACKAGE_NAME = "com.rohankanjani.lull"
 
 # Reads a build setting of the app target. `sh` runs from the fastlane folder, hence the "../".
+# Builds the iPhone app without the Apple Watch app inside it, for releases before the watch app is set up in App Store
+# Connect. Only this checkout's project changes, as the signing settings below do too.
+def leave_out_watch_app
+  require "xcodeproj"
+  project = Xcodeproj::Project.open("../#{PROJECT}")
+  app = project.targets.find { |target| target.name == "Lull" }
+  watch = ->(name) { name.to_s.start_with?("LullWatch") }
+  app.dependencies.select { |dependency| watch.call(dependency.target&.name) }.each(&:remove_from_project)
+  app.copy_files_build_phases.each do |phase|
+    phase.files.select { |file| watch.call(file.display_name) }.each { |file| phase.remove_build_file(file) }
+  end
+  project.save
+end
+
 def build_setting(name)
   output = sh("xcodebuild", "-showBuildSettings", "-project", "../#{PROJECT}", "-target", "Lull", log: false)
   output[/^\s*#{name} = (.+)$/, 1].to_s.strip
@@ -59,7 +76,13 @@ platform :ios do
       keychain_name: "fastlane_tmp_keychain",
       keychain_password: ""
     )
-    profiles = SIGNED_TARGETS.to_h do |target, bundle_id|
+    signed = SIGNED_TARGETS
+    unless SHIPS_WATCH_APPS
+      UI.important("WATCH_APPS_RELEASE isn't \"true\", so the iPhone app goes out without the Apple Watch app.")
+      leave_out_watch_app
+      signed = SIGNED_TARGETS.reject { |target, _| target.start_with?("LullWatch") }
+    end
+    profiles = signed.to_h do |target, bundle_id|
       get_provisioning_profile(api_key: api_key, app_identifier: bundle_id, team_id: TEAM_ID)
       profile = lane_context[SharedValues::SIGH_NAME]
       update_code_signing_settings(
@@ -111,9 +134,10 @@ platform :android do
 
     # The phone app and the watch app go out on tracks of their own, and each is checked, so a re-run finishes a
     # release where only one went through. The Wear OS track may not be readable before Wear OS is added to the app in
-    # Play Console; that counts as not released, as with the version codes below.
+    # Play Console; that counts as not released, as with the version codes below. Without WATCH_APPS_RELEASE, the watch
+    # app counts as released, so it's neither looked for nor uploaded.
     phone_released = google_play_track_release_names(package_name: PACKAGE_NAME, track: track, json_key_data: json_key).include?(version)
-    watch_released = begin
+    watch_released = !SHIPS_WATCH_APPS || begin
       google_play_track_release_names(package_name: PACKAGE_NAME, track: "wear:#{track}", json_key_data: json_key).include?(version)
     rescue StandardError => error
       # Said, so a failure for another reason, which would release the watch app again, isn't missed.
@@ -161,6 +185,7 @@ platform :android do
 
     # The watch app goes out on the Wear OS track of the same release, once Wear OS is added to the app in Play
     # Console (docs/RELEASING.md). The listing is the phone's, uploaded with it.
+    UI.important("WATCH_APPS_RELEASE isn't \"true\", so the Wear OS app isn't uploaded.") unless SHIPS_WATCH_APPS
     unless watch_released
       upload_to_play_store(
         package_name: PACKAGE_NAME,

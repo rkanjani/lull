@@ -12,6 +12,14 @@ Lull ships to both stores from `main`, under one version number:
 Each workflow skips pushes that only touch the other platform. Both run for changes to shared files,
 such as the version in `Lull.xcodeproj`.
 
+The watch apps go out only once the `WATCH_APPS_RELEASE` repository variable is `true`. Until then the
+iPhone app is built without the Apple Watch app inside it, and the Wear OS app isn't uploaded, so the store
+setup the watch apps need (below) never holds up a release. Once it's done:
+
+```bash
+gh variable set WATCH_APPS_RELEASE --body true --repo rkanjani/lull
+```
+
 ## Cutting a release
 
 1. Raise **Version** in Xcode (`MARKETING_VERSION`, for example 1.0 → 1.1). The Android app reads the
@@ -100,7 +108,7 @@ widgets, and again before the first with the watch app:
 The release lane signs all four targets and gives them the app's version, so only the app's **Version**
 needs raising. The watch app has no listing of its own: App Store Connect shows it under the iPhone app.
 
-Before the first release with the watch app, add Apple Watch screenshots to the version in App Store
+Before turning on `WATCH_APPS_RELEASE`, add Apple Watch screenshots to the version in App Store
 Connect, under its **Apple Watch** tab. The lane doesn't upload screenshots, and App Store Connect won't
 submit a version with a watch app until it has them. Until then the build uploads but the submission
 fails; run the workflow again once they're added.
@@ -205,7 +213,7 @@ gh variable set PLAY_STORE_RELEASE --body true --repo rkanjani/lull
 gh workflow run play-store.yml --repo rkanjani/lull
 ```
 
-Before the first release with the Wear OS app, add it in Play Console: **Test and release → Advanced
+Before turning on `WATCH_APPS_RELEASE`, add the Wear OS app in Play Console: **Test and release → Advanced
 settings → Form factors → Add form factor → Wear OS**, opt in to Wear OS distribution, and add Wear OS
 screenshots to the listing. Until then the upload to the Wear OS track fails, after the phone app's has gone
 through; run the workflow again once Wear OS is added, and it uploads only the watch app.

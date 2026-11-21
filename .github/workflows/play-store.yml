@@ -75,3 +75,4 @@ jobs:
           LULL_UPLOAD_KEY_ALIAS: upload
           LULL_UPLOAD_KEY_PASSWORD: ${{ secrets.PLAY_UPLOAD_KEYSTORE_PASSWORD }}
           PLAY_RELEASE_STATUS: ${{ vars.PLAY_RELEASE_STATUS || 'completed' }}
+          WATCH_APPS_RELEASE: ${{ vars.WATCH_APPS_RELEASE }}
