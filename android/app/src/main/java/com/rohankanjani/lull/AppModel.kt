@@ -472,7 +472,8 @@ class AppModel(
                 wanted += bedJet.id to LiveNotifications.Wanted.Keep
             } else if (status != null) {
                 wanted += bedJet.id to LiveNotifications.Wanted.Show(LiveSide(bedJet.id, status, title(bedJet), bedJet.generation))
-            } else if (bedJet.status == null) {
+            } else if (bedJet.status == null || LiveStatus.awaitsSecondHalf(bedJet.status)) {
+                // Not heard from yet, or heard only half: a reconnect shouldn't end what's up and start it again.
                 wanted += bedJet.id to LiveNotifications.Wanted.Keep
             }
         }

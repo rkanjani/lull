@@ -55,6 +55,14 @@ final class LiveStatusTests: XCTestCase {
         XCTAssertNil(LiveStatus.of(run: nil, status: nil, generation: .v3, at: now))
     }
 
+    func testHalfAReportKeepsWhatsShown() {
+        // The first report after connecting can come without its second half; what's up stays until it arrives.
+        XCTAssertTrue(LiveStatus.awaitsSecondHalf(status(.heat, programStep: nil)))
+        XCTAssertFalse(LiveStatus.awaitsSecondHalf(status(.heat, programStep: 0)))
+        XCTAssertFalse(LiveStatus.awaitsSecondHalf(status(.standby, seconds: 0, programStep: nil)))
+        XCTAssertFalse(LiveStatus.awaitsSecondHalf(nil))
+    }
+
     func testAScheduleFromAnotherPhoneIsNotShown() {
         // Its phases aren't known here, and its timer only counts down the step it's on.
         XCTAssertNil(LiveStatus.of(run: nil, status: status(.cool, programStep: 2), generation: .v3, at: now))

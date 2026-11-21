@@ -64,6 +64,15 @@ class LiveStatusTest {
     }
 
     @Test
+    fun halfAReportKeepsWhatsShown() {
+        // The first report after connecting can come without its second half; what's up stays until it arrives.
+        assertTrue(LiveStatus.awaitsSecondHalf(status(Mode.HEAT, programStep = null)))
+        assertFalse(LiveStatus.awaitsSecondHalf(status(Mode.HEAT, programStep = 0)))
+        assertFalse(LiveStatus.awaitsSecondHalf(status(Mode.STANDBY, seconds = 0, programStep = null)))
+        assertFalse(LiveStatus.awaitsSecondHalf(null))
+    }
+
+    @Test
     fun aScheduleFromAnotherPhoneIsNotShown() {
         // Its phases aren't known here, and its timer only counts down the step it's on.
         assertNull(LiveStatus.of(null, status(Mode.COOL, programStep = 2), generation = Generation.V3, now = now))
