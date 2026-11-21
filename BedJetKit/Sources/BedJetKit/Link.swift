@@ -12,6 +12,8 @@ public protocol BedJetLink: AnyObject {
     var onStatus: ((DeviceStatus) -> Void)? { get set }
 
     func start()
+    /// Connects whenever the BedJet is free, without asking another phone that holds it to hand it over.
+    func listen()
     func stop()
     /// Asks for the BedJet on the person's behalf. It accepts one phone at a time, so this also asks
     /// another phone that is holding it to hand it over.
@@ -26,6 +28,9 @@ extension BedJetLink {
     public var generation: Generation { .v3 }
 
     public func requestControl() {}
+
+    /// A link that never shares its BedJet with another phone has no one to ask, so it connects as it always does.
+    public func listen() { start() }
 
     // MARK: Remote
 

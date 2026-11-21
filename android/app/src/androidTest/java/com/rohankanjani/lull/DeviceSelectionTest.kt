@@ -775,6 +775,36 @@ class DeviceSelectionTest {
     }
 
     @Test
+    fun openingLullFromAWidgetAsksNoOtherPhone() = onMain {
+        // The partner's phone has their BedJet, which this phone shows.
+        setups[partners.id] = { it.heldElsewhere = true }
+        val model = launch()
+        model.choose(partners)
+        val theirs = bedJet(partners, model)
+        model.appMovedToBackground()
+        val starts = unit(partners.id).starts
+        val listens = unit(partners.id).listens
+
+        // A Quick Remote button opens Lull, as iOS may, coming to the screen before the button's command reaches it.
+        AppCommands.handler = {}
+        try {
+            model.appBecameActive()
+            AppCommands.send(AppCommands.Command.Remote(RemotePreset.defaults[2], theirs.id))
+            delay(AppModel.ASK_DELAY_MS + 1_000)
+            assertEquals(starts, unit(partners.id).starts)
+            assertTrue(unit(partners.id).listens > listens)
+            assertEquals(LinkState.YIELDED, theirs.linkState)
+
+            // Opened as usual, Lull asks for the BedJet on screen.
+            model.appMovedToBackground()
+            model.appBecameActive()
+            waitUntil("Lull to ask for their BedJet") { unit(partners.id).starts > starts }
+        } finally {
+            AppCommands.handler = null
+        }
+    }
+
+    @Test
     fun aWidgetLeavesAScheduleFromAnotherPhoneRunning() = onMain {
         // The partner's phone started a schedule on this BedJet, then let go of it, as Lull does off screen.
         val theirs = StoredProgram("Theirs", listOf(ProgramStep(Mode.COOL, fanStep = 7, temperature = 40, hours = 2, minutes = 0)))
@@ -839,6 +869,14 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
     /** How many times another phone was asked to hand the BedJet over. */
     var requests = 0
         private set
+    /**
+     * How many times Lull asked for the BedJet, which a real link does by asking any phone that has it, and how many
+     * times it only waited for the BedJet to be free.
+     */
+    var starts = 0
+        private set
+    var listens = 0
+        private set
     private val held = mutableListOf<CompletableDeferred<Unit>>()
     val isHolding: Boolean get() = held.isNotEmpty()
     val heldCount: Int get() = held.size
@@ -858,6 +896,16 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
     }
 
     override fun start() {
+        starts += 1
+        connectIfFree()
+    }
+
+    override fun listen() {
+        listens += 1
+        connectIfFree()
+    }
+
+    private fun connectIfFree() {
         if (heldElsewhere) {
             onStateChange?.invoke(LinkState.YIELDED)
             return
@@ -874,7 +922,7 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
     override fun requestControl() {
         requests += 1
         heldElsewhere = false
-        start()
+        connectIfFree()
     }
 
     override suspend fun send(command: ByteArray) {

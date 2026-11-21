@@ -130,7 +130,15 @@ object AppCommands {
 
     private val pending = mutableListOf<Command>()
 
+    /**
+     * Set when a widget, tile or shortcut opened Lull to start a night or set a BedJet, until Lull leaves the screen.
+     * Lull then doesn't ask another phone for the BedJet by itself: a tap on one, easily made by accident, never takes
+     * it from someone using it.
+     */
+    var openedToAct = false
+
     fun send(command: Command) {
+        if (command !is Command.Show) openedToAct = true
         pending += command
         deliver()
     }

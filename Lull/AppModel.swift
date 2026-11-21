@@ -63,6 +63,10 @@ final class AppModel {
     @ObservationIgnored private let makesDiscovery: (Bool) -> BedJetDiscovery
     @ObservationIgnored private var discovery: BedJetDiscovery?
     @ObservationIgnored private var lookers = 0
+    /// The ask for the BedJet on screen, waiting for Lull to have been on screen a moment.
+    @ObservationIgnored private var asking: Task<Void, Never>?
+    /// How long that is, in nanoseconds: long enough for iOS to hand Lull what a widget asked for.
+    static let askDelay: UInt64 = 1_500_000_000
     @ObservationIgnored private let liveActivities = LiveActivities()
     @ObservationIgnored private var publishedWidgets: WidgetSnapshot?
     private var isLoaded = false
@@ -159,6 +163,9 @@ final class AppModel {
     }
 
     func appMovedToBackground() {
+        asking?.cancel()
+        asking = nil
+        AppCommands.openedToAct = false
         for bedJet in bedJets { bedJet.pause() }
         discovery?.stop()
         // iOS can hold back a redraw asked for moments after another, and the BedJet changes in bursts, so the widgets
@@ -167,8 +174,24 @@ final class AppModel {
     }
 
     func appBecameActive() {
-        for bedJet in bedJets { bedJet.resume(asking: bedJet.id == selectedID) }
+        for bedJet in bedJets { bedJet.resume(asking: false) }
+        askForShownSoon()
         if lookers > 0 { discovery?.start() }
+    }
+
+    /// Asks another phone for the BedJet on screen, once Lull has been on screen a moment. Every BedJet connects by
+    /// itself straight away if it's free; asking only matters when another phone has it. The moment's wait lets a
+    /// widget, control or shortcut that opened Lull say so first (`AppCommands.openedToAct`), as iOS may bring Lull to
+    /// the screen before it runs one, and then nothing is asked.
+    private func askForShownSoon() {
+        asking?.cancel()
+        guard let id = selectedID else { return }
+        asking = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.askDelay)
+            guard let self, !Task.isCancelled, !AppCommands.openedToAct,
+                  let shown = self.bedJet, shown.id == id, !shown.isConnected else { return }
+            shown.resume(asking: true)
+        }
     }
 
     func makeLink(for bedJet: BedJet) -> BedJetLink {
@@ -187,7 +210,8 @@ final class AppModel {
         bedJets = fleet.bedJets.map { BedJet($0, isDemo: demoMode, app: self) }
         // Versions that knew several BedJets showed the first until another was picked.
         selectedID = needsChoice ? nil : fleet.selected.flatMap { id in bedJets.first { $0.id == id }?.id } ?? bedJets.first?.id
-        for bedJet in bedJets { bedJet.connect(asking: bedJet.id == selectedID) }
+        for bedJet in bedJets { bedJet.connect(asking: false) }
+        askForShownSoon()
     }
 
     // MARK: From outside the app

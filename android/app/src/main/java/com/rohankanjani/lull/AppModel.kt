@@ -22,6 +22,8 @@ import com.rohankanjani.lull.bedjetkit.StoredProgram
 import com.rohankanjani.lull.widgets.WidgetUpdates
 import com.rohankanjani.lull.widgets.requestTileUpdates
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -145,6 +147,8 @@ class AppModel(
         discovery ?: { demo -> if (demo) DemoDiscovery() else BleDiscovery(application) }
     private var discovery: BedJetDiscovery? = null
     private var lookers = 0
+    /** The ask for the BedJet on screen, waiting for Lull to have been on screen a moment. */
+    private var asking: Job? = null
     private var isLoaded = false
     /** The BedJets of the mode not in use, kept as they were saved. */
     private var otherFleet: Fleet? = null
@@ -232,6 +236,9 @@ class AppModel(
     }
 
     fun appMovedToBackground() {
+        asking?.cancel()
+        asking = null
+        AppCommands.openedToAct = false
         for (bedJet in bedJets) bedJet.pause()
         discovery?.stop()
         // A redraw asked for moments after another can be held back, and the BedJet changes in bursts, so the
@@ -240,15 +247,33 @@ class AppModel(
     }
 
     fun appBecameActive() {
-        for (bedJet in bedJets) bedJet.resume(asking = bedJet.id == selectedID)
+        for (bedJet in bedJets) bedJet.resume(asking = false)
+        askForShownSoon()
         if (lookers > 0) discovery?.start()
     }
 
     /** Bluetooth access was just granted or refused; look at the radio again. */
     fun permissionsChanged() {
         if (demoMode) return
-        for (bedJet in bedJets) bedJet.connect(asking = bedJet.id == selectedID)
+        for (bedJet in bedJets) bedJet.connect(asking = false)
+        askForShownSoon()
         if (lookers > 0) discovery?.start()
+    }
+
+    /**
+     * Asks another phone for the BedJet on screen, once Lull has been on screen a moment. Every BedJet connects by
+     * itself straight away if it's free; asking only matters when another phone has it. The moment's wait lets a widget,
+     * tile or shortcut that opened Lull say so first ([AppCommands.openedToAct]), and then nothing is asked.
+     */
+    private fun askForShownSoon() {
+        asking?.cancel()
+        val id = selectedID ?: return
+        asking = scope.launch {
+            delay(ASK_DELAY_MS)
+            val shown = bedJet
+            if (AppCommands.openedToAct || shown == null || shown.id != id || shown.isConnected) return@launch
+            shown.resume(asking = true)
+        }
     }
 
     fun makeLink(bedJet: BedJet): BedJetLink {
@@ -269,7 +294,8 @@ class AppModel(
         // Versions that knew several BedJets showed the first until another was picked.
         selectedID = if (needsChoice) null
         else fleet.selected?.let { id -> bedJets.firstOrNull { it.id == id }?.id } ?: bedJets.firstOrNull()?.id
-        for (bedJet in bedJets) bedJet.connect(asking = bedJet.id == selectedID)
+        for (bedJet in bedJets) bedJet.connect(asking = false)
+        askForShownSoon()
     }
 
     // From outside the app
@@ -533,6 +559,9 @@ class AppModel(
 
     companion object {
         val json = Json { ignoreUnknownKeys = true }
+
+        /** How long Lull is on screen before asking another phone for the BedJet shown, as on iOS. */
+        const val ASK_DELAY_MS = 1_500L
 
         /** Four characters of the identifier this phone knows the unit by. They never change, unlike names. */
         fun code(unit: String): String = unit.filter { it.isLetterOrDigit() }.take(4).uppercase()

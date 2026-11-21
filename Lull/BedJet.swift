@@ -161,11 +161,7 @@ final class BedJet: Identifiable {
     }
 
     func resume(asking: Bool) {
-        if !asking, let ble = link as? BLELink {
-            ble.listen()
-        } else {
-            link?.start()
-        }
+        if asking { link?.start() } else { link?.listen() }
         restartSearchTimer()
     }
 
