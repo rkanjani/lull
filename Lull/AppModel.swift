@@ -427,7 +427,8 @@ final class AppModel {
                                                  generation: bedJet.generation) {
                 wanted.append((bedJet.id, .show(.init(id: bedJet.id, status: status, name: title(of: bedJet),
                                                        generation: bedJet.generation))))
-            } else if bedJet.status == nil {
+            } else if bedJet.status == nil || LiveStatus.awaitsSecondHalf(bedJet.status) {
+                // Not heard from yet, or heard only half: a reconnect shouldn't end what's up and start it again.
                 wanted.append((bedJet.id, .keep))
             }
         }

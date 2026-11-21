@@ -51,6 +51,13 @@ sealed interface LiveStatus {
 
     companion object {
         /**
+         * Whether a running BedJet's report is still missing its second half, as the first report after connecting can be.
+         * Whether a schedule is running isn't known until it arrives, so what's up is kept rather than taken down.
+         */
+        fun awaitsSecondHalf(status: DeviceStatus?): Boolean =
+            status != null && status.isRunning && status.remainingSeconds > 0 && status.extra == null
+
+        /**
          * What to show for a BedJet, or null when it is off. A schedule another phone started isn't shown: its phases
          * aren't known here, and its timer only counts down the step it is on.
          * @param reportedAt When the BedJet sent [status]. The last report is kept while Lull is away from the BedJet,
