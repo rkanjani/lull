@@ -213,8 +213,7 @@ class BedJet(saved: SavedBedJet, val isDemo: Boolean, private val app: AppModel)
     }
 
     fun resume(asking: Boolean) {
-        val ble = link as? BleLink
-        if (!asking && ble != null) ble.listen() else link?.start()
+        if (asking) link?.start() else link?.listen()
         restartSearchTimer()
     }
 

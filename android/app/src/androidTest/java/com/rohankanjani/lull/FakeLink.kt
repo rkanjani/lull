@@ -34,6 +34,14 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
     /** How many times another phone was asked to hand the BedJet over. */
     var requests = 0
         private set
+    /**
+     * How many times Lull asked for the BedJet, which a real link does by asking any phone that has it, and how many
+     * times it only waited for the BedJet to be free.
+     */
+    var starts = 0
+        private set
+    var listens = 0
+        private set
     private val held = mutableListOf<CompletableDeferred<Unit>>()
     val isHolding: Boolean get() = held.isNotEmpty()
     val heldCount: Int get() = held.size
@@ -53,6 +61,16 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
     }
 
     override fun start() {
+        starts += 1
+        connectIfFree()
+    }
+
+    override fun listen() {
+        listens += 1
+        connectIfFree()
+    }
+
+    private fun connectIfFree() {
         if (heldElsewhere) {
             onStateChange?.invoke(LinkState.YIELDED)
             return
@@ -69,7 +87,7 @@ class FakeLink(name: String, private val scope: CoroutineScope) : BedJetLink {
     override fun requestControl() {
         requests += 1
         heldElsewhere = false
-        start()
+        connectIfFree()
     }
 
     override suspend fun send(command: ByteArray) {

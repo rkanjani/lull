@@ -18,6 +18,10 @@ final class FakeLink: BedJetLink {
     private(set) var stops = 0
     /// How many times another phone was asked to hand the BedJet over.
     private(set) var requests = 0
+    /// How many times Lull asked for the BedJet, which a real link does by asking any phone that has it, and how many
+    /// times it only waited for the BedJet to be free.
+    private(set) var starts = 0
+    private(set) var listens = 0
     private var held: [CheckedContinuation<Void, Never>] = []
     var isHolding: Bool { !held.isEmpty }
     var heldCount: Int { held.count }
@@ -38,6 +42,16 @@ final class FakeLink: BedJetLink {
     }
 
     func start() {
+        starts += 1
+        connectIfFree()
+    }
+
+    func listen() {
+        listens += 1
+        connectIfFree()
+    }
+
+    private func connectIfFree() {
         if heldElsewhere {
             onStateChange?(.yielded)
             return
@@ -54,7 +68,7 @@ final class FakeLink: BedJetLink {
     func requestControl() {
         requests += 1
         heldElsewhere = false
-        start()
+        connectIfFree()
     }
 
     func send(_ command: Data) async throws {

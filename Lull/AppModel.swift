@@ -69,6 +69,10 @@ final class AppModel {
     @ObservationIgnored private let makesDiscovery: (Bool) -> BedJetDiscovery
     @ObservationIgnored private var discovery: BedJetDiscovery?
     @ObservationIgnored private var lookers = 0
+    /// The ask for the BedJet on screen, waiting for Lull to have been on screen a moment.
+    @ObservationIgnored private var asking: Task<Void, Never>?
+    /// How long that is, in nanoseconds: long enough for iOS to hand Lull what a widget asked for.
+    static let askDelay: UInt64 = 1_500_000_000
     @ObservationIgnored private let liveActivities = LiveActivities()
     @ObservationIgnored private var publishedWidgets: WidgetSnapshot?
     private var isLoaded = false
@@ -187,6 +191,9 @@ final class AppModel {
     }
 
     func appMovedToBackground() {
+        asking?.cancel()
+        asking = nil
+        AppCommands.openedToAct = false
         isOnScreen = false
         // An errand from the watch lets go of its BedJet itself, once it's done.
         for bedJet in bedJets where errands[bedJet.id] == nil { bedJet.pause() }
@@ -197,12 +204,34 @@ final class AppModel {
     }
 
     /// Lull came on screen. A model made on screen is already talking to its BedJets, and coming back from Notification
-    /// Center never left it, so nothing is asked again.
+    /// Center never left it, so nothing is started again; only an ask still waiting for its moment waits from now.
     func appBecameActive() {
-        guard !isOnScreen else { return }
+        guard !isOnScreen else {
+            // Made on screen, Lull may only be shown now, with a widget's command after that, so the ask waits from now.
+            if asking != nil { askForShownSoon() }
+            return
+        }
         isOnScreen = true
-        for bedJet in bedJets { bedJet.resume(asking: bedJet.id == selectedID) }
+        for bedJet in bedJets { bedJet.resume(asking: false) }
+        askForShownSoon()
         if lookers > 0 { discovery?.start() }
+    }
+
+    /// Asks another phone for the BedJet on screen, once Lull has been on screen a moment. Every BedJet connects by
+    /// itself straight away if it's free; asking only matters when another phone has it. The moment's wait lets a
+    /// widget, control or shortcut that opened Lull say so first (`AppCommands.openedToAct`), as iOS may bring Lull to
+    /// the screen before it runs one, and then nothing is asked.
+    private func askForShownSoon() {
+        asking?.cancel()
+        guard let id = selectedID else { return }
+        asking = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.askDelay)
+            guard let self, !Task.isCancelled else { return }
+            self.asking = nil
+            guard self.isOnScreen, !AppCommands.openedToAct,
+                  let shown = self.bedJet, shown.id == id, !shown.isConnected else { return }
+            shown.resume(asking: true)
+        }
     }
 
     // MARK: Tonight and the Remote, for the watch
@@ -375,7 +404,9 @@ final class AppModel {
         // Versions that knew several BedJets showed the first until another was picked.
         selectedID = needsChoice ? nil : fleet.selected.flatMap { id in bedJets.first { $0.id == id }?.id } ?? bedJets.first?.id
         // Off screen, as when the watch wakes Lull, nothing connects, and above all no other phone is asked for its BedJet.
-        for bedJet in bedJets { bedJet.connect(asking: bedJet.id == selectedID, resuming: isOnScreen) }
+        // On screen, the one shown is asked for after a moment, as when Lull comes on screen.
+        for bedJet in bedJets { bedJet.connect(asking: false, resuming: isOnScreen) }
+        if isOnScreen { askForShownSoon() }
     }
 
     // MARK: From outside the app
@@ -616,7 +647,8 @@ final class AppModel {
                                                  generation: bedJet.generation) {
                 wanted.append((bedJet.id, .show(.init(id: bedJet.id, status: status, name: title(of: bedJet),
                                                        generation: bedJet.generation))))
-            } else if bedJet.status == nil {
+            } else if bedJet.status == nil || LiveStatus.awaitsSecondHalf(bedJet.status) {
+                // Not heard from yet, or heard only half: a reconnect shouldn't end what's up and start it again.
                 wanted.append((bedJet.id, .keep))
             }
         }

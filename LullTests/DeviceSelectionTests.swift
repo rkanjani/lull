@@ -675,6 +675,32 @@ final class DeviceSelectionTests: XCTestCase {
         XCTAssertTrue(unit(partners.id).sent.contains(try XCTUnwrap(Codec.setMode(.heat))))
     }
 
+    func testOpeningLullFromAWidgetAsksNoOtherPhone() async throws {
+        // The partner's phone has their BedJet, which this phone shows.
+        setups[partners.id] = { $0.heldElsewhere = true }
+        let model = launch()
+        model.choose(partners)
+        let theirs = try bedJet(partners, in: model)
+        model.appMovedToBackground()
+        let starts = unit(partners.id).starts
+        let listens = unit(partners.id).listens
+
+        // A Quick Remote button opens Lull. iOS may bring Lull to the screen before handing it the button's command.
+        defer { AppCommands.handler = nil }
+        AppCommands.handler = { _ in }
+        model.appBecameActive()
+        AppCommands.send(.remote(RemotePreset.defaults[2], theirs.id))
+        try await Task.sleep(nanoseconds: AppModel.askDelay + 1_000_000_000)
+        XCTAssertEqual(unit(partners.id).starts, starts)
+        XCTAssertGreaterThan(unit(partners.id).listens, listens)
+        XCTAssertEqual(theirs.linkState, .yielded)
+
+        // Opened as usual, Lull asks for the BedJet on screen.
+        model.appMovedToBackground()
+        model.appBecameActive()
+        try await waitUntil("Lull to ask for their BedJet") { self.unit(partners.id).starts > starts }
+    }
+
     func testAWidgetLeavesAScheduleFromAnotherPhoneRunning() async throws {
         // The partner's phone started a schedule on this BedJet, then let go of it, as Lull does off screen.
         let theirs = StoredProgram(name: "Theirs", steps: [ProgramStep(mode: .cool, fanStep: 7, temperature: 40, hours: 2, minutes: 0)])

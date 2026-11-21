@@ -29,6 +29,13 @@ enum LiveStatus: Codable, Hashable {
                     endsAt: endsAt)
     }
 
+    /// Whether a running BedJet's report is still missing its second half, as the first report after connecting can be.
+    /// Whether a schedule is running isn't known until it arrives, so what's up is kept rather than taken down.
+    static func awaitsSecondHalf(_ status: DeviceStatus?) -> Bool {
+        guard let status else { return false }
+        return status.isRunning && status.remainingSeconds > 0 && status.extra == nil
+    }
+
     var endsAt: Date {
         switch self {
         case let .night(run): run.endsAt

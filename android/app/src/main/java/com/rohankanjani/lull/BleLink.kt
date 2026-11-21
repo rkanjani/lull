@@ -200,7 +200,7 @@ class BleLink(
     }
 
     /** Connects whenever the BedJet is free, without asking another phone to hand it over. */
-    fun listen() {
+    override fun listen() {
         wantsConnection = true
         watchRadio()
         if (radioUsable()) connectIfPossible()

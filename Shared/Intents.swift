@@ -362,7 +362,13 @@ enum AppCommands {
 
     private static var pending: [Command] = []
 
+    /// Set when a widget, control or shortcut opened Lull to start a night or set a BedJet, until Lull leaves the
+    /// screen. Lull then doesn't ask another phone for the BedJet by itself: a tap on one, easily made by accident,
+    /// never takes it from someone using it.
+    static var openedToAct = false
+
     static func send(_ command: Command) {
+        if case .show = command {} else { openedToAct = true }
         pending.append(command)
         deliver()
     }
